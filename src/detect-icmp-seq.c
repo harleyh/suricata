@@ -43,12 +43,12 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectIcmpSeqMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+static int DetectIcmpSeqMatch(DetectEngineThreadCtx *, Packet *,
         const Signature *, const SigMatchCtx *);
 static int DetectIcmpSeqSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectIcmpSeqRegisterTests(void);
 void DetectIcmpSeqFree(void *);
-static int PrefilterSetupIcmpSeq(SigGroupHead *sgh);
+static int PrefilterSetupIcmpSeq(DetectEngineCtx *de_ctx, SigGroupHead *sgh);
 static _Bool PrefilterIcmpSeqIsPrefilterable(const Signature *s);
 
 /**
@@ -89,7 +89,7 @@ static inline _Bool GetIcmpSeq(Packet *p, uint16_t *seq)
             case ICMP_ADDRESSREPLY:
                 SCLogDebug("ICMPV4_GET_SEQ(p) %"PRIu16" (network byte order), "
                         "%"PRIu16" (host byte order)", ICMPV4_GET_SEQ(p),
-                        ntohs(ICMPV4_GET_SEQ(p)));
+                        SCNtohs(ICMPV4_GET_SEQ(p)));
 
                 seqn = ICMPV4_GET_SEQ(p);
                 break;
@@ -104,7 +104,7 @@ static inline _Bool GetIcmpSeq(Packet *p, uint16_t *seq)
             case ICMP6_ECHO_REPLY:
                 SCLogDebug("ICMPV6_GET_SEQ(p) %"PRIu16" (network byte order), "
                         "%"PRIu16" (host byte order)", ICMPV6_GET_SEQ(p),
-                        ntohs(ICMPV6_GET_SEQ(p)));
+                        SCNtohs(ICMPV6_GET_SEQ(p)));
 
                 seqn = ICMPV6_GET_SEQ(p);
                 break;
@@ -132,7 +132,7 @@ static inline _Bool GetIcmpSeq(Packet *p, uint16_t *seq)
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectIcmpSeqMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+static int DetectIcmpSeqMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
         const Signature *s, const SigMatchCtx *ctx)
 {
     uint16_t seqn;
@@ -302,9 +302,9 @@ PrefilterPacketIcmpSeqCompare(PrefilterPacketHeaderValue v, void *smctx)
     return FALSE;
 }
 
-static int PrefilterSetupIcmpSeq(SigGroupHead *sgh)
+static int PrefilterSetupIcmpSeq(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(sgh, DETECT_ICMP_SEQ,
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_ICMP_SEQ,
         PrefilterPacketIcmpSeqSet,
         PrefilterPacketIcmpSeqCompare,
         PrefilterPacketIcmpSeqMatch);

@@ -47,7 +47,6 @@
 #define FILE_STORED     BIT_U16(11)
 #define FILE_NOTRACK    BIT_U16(12) /**< track size of file */
 #define FILE_USE_DETECT BIT_U16(13) /**< use content_inspected tracker */
-#define FILE_USE_TRACKID    BIT_U16(14) /**< File::file_track_id field is in use */
 #define FILE_HAS_GAPS   BIT_U16(15)
 
 typedef enum FileState_ {
@@ -64,11 +63,10 @@ typedef enum FileState_ {
 typedef struct File_ {
     uint16_t flags;
     uint16_t name_len;
-    int16_t state;
+    FileState state;
     StreamingBuffer *sb;
     uint64_t txid;                  /**< tx this file is part of */
-    uint32_t file_track_id;         /**< id used by protocol parser. Optional
-                                     *   only used if FILE_USE_TRACKID flag set */
+    uint32_t file_track_id;         /**< id used by protocol parser */
     uint32_t file_store_id;         /**< id used in store file name file.<id> */
     int fd;                         /**< file descriptor for filestore, not
                                         open if equal to -1 */
@@ -89,6 +87,14 @@ typedef struct File_ {
                                      *   flag is set */
     uint64_t content_stored;
     uint64_t size;
+    uint32_t inspect_window;
+    uint32_t inspect_min_size;
+    uint64_t start;
+    uint64_t end;
+
+    uint32_t *sid; /* signature id of a rule that triggered the filestore event */
+    uint32_t sid_cnt;
+    uint32_t sid_max;
 } File;
 
 typedef struct FileContainer_ {
@@ -123,10 +129,7 @@ void FileContainerAdd(FileContainer *, File *);
  *  It's the responsibility of the API user to make sure this tracker is
  *  properly updated.
  */
-File *FileOpenFile(FileContainer *, const StreamingBufferConfig *,
-        const uint8_t *name, uint16_t name_len,
-        const uint8_t *data, uint32_t data_len, uint16_t flags);
-File *FileOpenFileWithId(FileContainer *, const StreamingBufferConfig *,
+int FileOpenFileWithId(FileContainer *, const StreamingBufferConfig *,
         uint32_t track_id, const uint8_t *name, uint16_t name_len,
         const uint8_t *data, uint32_t data_len, uint16_t flags);
 
@@ -145,6 +148,8 @@ int FileCloseFile(FileContainer *, const uint8_t *data, uint32_t data_len,
         uint16_t flags);
 int FileCloseFileById(FileContainer *, uint32_t track_id,
         const uint8_t *data, uint32_t data_len, uint16_t flags);
+int FileCloseFilePtr(File *ff, const uint8_t *data,
+        uint32_t data_len, uint16_t flags);
 
 /**
  *  \brief Store a chunk of file data in the flow. The open "flowfile"
@@ -162,6 +167,20 @@ int FileAppendDataById(FileContainer *, uint32_t track_id,
         const uint8_t *data, uint32_t data_len);
 int FileAppendGAPById(FileContainer *ffc, uint32_t track_id,
         const uint8_t *data, uint32_t data_len);
+
+void FileSetInspectSizes(File *file, const uint32_t win, const uint32_t min);
+
+/**
+ *  \brief Sets the offset range for a file.
+ *
+ *  \param ffc the container
+ *  \param start start offset
+ *  \param end end offset
+ *
+ *  \retval 0 ok
+ *  \retval -1 error
+ */
+int FileSetRange(FileContainer *, uint64_t start, uint64_t end);
 
 /**
  *  \brief Tag a file for storing

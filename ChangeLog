@@ -1,3 +1,468 @@
+5.0.1 -- 2019-12-13
+
+Bug #1871: intermittent abort()s at shutdown and in unix-socket
+Bug #2810: enabling add request/response http headers in master
+Bug #3047: byte_extract does not work in some situations
+Bug #3073: AC_CHECK_FILE on cross compile
+Bug #3103: --engine-analysis warning for flow on an icmp request rule
+Bug #3120: nfq_handle_packet error -1 Resource temporarily unavailable warnings
+Bug #3237: http_accept not treated as sticky buffer by --engine-analysis
+Bug #3254: tcp: empty SACK option leads to decoder event
+Bug #3263: nfq: invalid number of bytes reported
+Bug #3264: EVE DNS Warning about defaulting to v2 as version is not set.
+Bug #3266: fast-log: icmp type prints wrong value
+Bug #3267: Support for tcp.hdr Behavior
+Bug #3275: address parsing: memory leak in error path
+Bug #3277: segfault when test a nfs pcap file
+Bug #3281: Impossible to cross-compile due to AC_CHECK_FILE
+Bug #3284: hash function for string in dataset is not correct
+Bug #3286: TCP evasion technique by faking a closed TCP session
+Bug #3324: TCP evasion technique by overlapping a TCP segment with a fake packet
+Bug #3328: bad ip option evasion
+Bug #3340: DNS: DNS over TCP transactions logged with wrong direction.
+Bug #3341: tcp.hdr content matches don't work as expected
+Bug #3345: App-Layer: Not all parsers register TX detect flags that should
+Bug #3346: BPF filter on command line not honored for pcap file
+Bug #3362: cross compiling not affecting rust component of surrcata
+Bug #3376: http: pipelining tx id handling broken
+Bug #3386: Suricata is unable to get MTU from NIC after 4.1.0
+Bug #3389: EXTERNAL_NET no longer working in 5.0 as expected
+Bug #3390: Eve log does not generate pcap_filename when Interacting via unix socket in pcap processing mode
+Bug #3397: smtp: file tracking issues when more than one attachment in a tx
+Bug #3398: smtp: 'raw-message' option file tracking issues with multi-tx
+Bug #3399: smb: post-GAP some transactions never close
+Bug #3401: smb1: 'event only' transactions for bad requests never close
+Bug #3411: detect/asn1: crashes on packets smaller than offset setting
+Task #3364: configure: Rust 1.37+ has cargo-vendor support bundled into cargo.
+Documentation #2885: update documentation to indicate -i can be used multiple times
+
+5.0.0 -- 2019-10-15
+
+Feature #1851: add verbosity level description to the help command
+Feature #1940: Debian Jessie - better message when trying to run 2 suricata with afpacket
+Feature #3204: ja3(s): automatically enable when rules require it
+Bug #1443: deprecated library calls
+Bug #1778: af_packet: IPS and defrag
+Bug #2386: check if default log dir is writable at start up
+Bug #2465: Eve Stats will not be reported unless stats.log is enabled
+Bug #2490: Filehash rule does not fire without filestore keyword
+Bug #2668: make install-full fails if CARGO_TARGET_DIR has spaces in the directory path
+Bug #2669: make install-full fails due to being unable to find libhtp.so.2
+Bug #2955: lua issues on arm (fedora:29)
+Bug #3113: python-yaml dependency is actually ptyhon3-yaml dependency
+Bug #3139: enip: compile warnings on gcc-8
+Bug #3143: datasets: don't use list in global config
+Bug #3190: file_data inspection inhibited by additional (non-file_data) content match rule
+Bug #3196: Distributed archive do not include eBPF files
+Bug #3209: Copy engine provided classification.config to $datadir/suricata.
+Bug #3210: Individual output log levels capped by the default log level
+Bug #3216: MSN protocol detection/parser is not working
+Bug #3223: --disable-geoip does not work
+Bug #3226: ftp: ASAN error
+Bug #3232: Static build with pcap fails
+Optimization #3039: configure: don't generate warnings on missing features
+Documentation #2640: http-body and http-body-printable in eve-log require metadata to be enabled, yet there is no indication of this anywhere
+Documentation #2839: Update perf and tuning user guides
+Documentation #2876: doc: add nftables with nfqueue section
+Documentation #3207: Update the http app-layer doc and config
+Documentation #3230: EVE DNS logger defaults to version 2 instead of version when version not specified.
+
+5.0.0-rc1 -- 2019-09-24
+
+Feature #524: detect double encoding in URI
+Feature #713: tls.fingerprint - file usage
+Feature #997: Add libhtp event for every htp_log() that needs an event.
+Feature #1203: TCP Fast Open support
+Feature #1249: http/dns ip-reputation alike technique
+Feature #1757: URL Reputation
+Feature #2200: Dynamically add md5 to blacklist without full restart
+Feature #2283: turn content modifiers into 'sticky buffers'
+Feature #2314: protocol parser: rdp
+Feature #2315: eve: ftp logging
+Feature #2318: matching on large amounts of data with dynamic updates
+Feature #2529: doc: include quick start guide
+Feature #2539: protocol parser: vxlan
+Feature #2670: tls_cert sticky buffer
+Feature #2684: Add JA3S
+Feature #2738: SNMP parser, logging and detection
+Feature #2754: JA3 and JA3S - sets / reputation
+Feature #2758: intel / reputation matching on arbitrary data
+Feature #2789: Use clang for building eBPF programs even if Suricata is built using GCC
+Feature #2916: FTP decoder should have Rust port parsers
+Feature #2940: document anomaly log
+Feature #2941: anomaly log: add protocol detection events
+Feature #2952: modernize http_header_names
+Feature #3011: Add new 'cluster_peer' runmode to allow for load balancing by IP header (src<->dst) only
+Feature #3058: Hardware offload for XDP bypass
+Feature #3059: Use pinned maps in XDP bypass
+Feature #3060: Add way to detect TCP MSS values
+Feature #3061: Add way to inspect TCP header
+Feature #3062: Add way to inspect UDP header
+Feature #3074: DNS full domain matching within the dns_query buffer
+Feature #3080: Provide a IP pair XDP load balancing
+Feature #3081: Decapsulation of GRE in XDP filter
+Feature #3084: SIP parser, logging and detection
+Feature #3165: New rule keyword: dns.opcode; For matching on the the opcode in the DNS header.
+Bug #941: Support multiple stacked compression, compression that specifies the wrong compression type
+Bug #1271: Creating core dump with dropped privileges
+Bug #1656: several silent bypasses at the HTTP application level (chunking, compression, HTTP 0.9...)
+Bug #1776: Multiple Content-Length headers causes HTP_STREAM_ERROR
+Bug #2080: Rules with bad port group var do not error
+Bug #2146: DNS answer not logged with eve-log
+Bug #2210: logging: SC_LOG_OP_FILTER still displays some lines not matching filter
+Bug #2264: file-store.stream-depth not working as expected when configured to a specfic value
+Bug #2395: File_data inspection depth while inspecting base64 decoded data
+Bug #2619: Malformed HTTP causes FN using http_header_names;
+Bug #2626: doc/err: More descriptive message on err for escaping backslash
+Bug #2654: Off-by-one iteration of EBPF flow_table_vX in EBPFForEachFlowVXTable (util-ebpf.c)
+Bug #2655: GET/POST HTTP-request with no Content-Length, http_client_body miss
+Bug #2662: unix socket - memcap read/set showing unlimited where there are limited values configured by default
+Bug #2686: Fancy Quotes in Documentation
+Bug #2765: GeoIP keyword depends on now discontinued legacy GeoIP database
+Bug #2769: False positive alerts firing after upgrade suricata 3.0 -> 4.1.0
+Bug #2786: make install-full does not install some source events rules
+Bug #2840: xdp modes - Invalid argument (-22) on certain NICs
+Bug #2847: Confusing warning “Rule is inspecting both directions” when inspecting engine analysis output
+Bug #2853: filestore (v1 and v2): dropping of "unwanted" files
+Bug #2926: engine-analysis with content modifiers not always issues correct warning
+Bug #2942: anomaly log: app layer events
+Bug #2951: valgrind warnings in ftp
+Bug #2953: bypass keyword: Suricata 4.1.x Segmentation Faults
+Bug #2961: filestore: memory leaks
+Bug #2965: Version 5 Beta1 - Multiple NFQUEUE failed
+Bug #2986: stream bypass not making callback as expected
+Bug #2992: Build failure on m68k with uclibc
+Bug #2999: AddressSanitizer: heap-buffer-overflow in HTPParseContentRange
+Bug #3000: tftp: missing logs because of broken tx handling
+Bug #3004: SC_ERR_PCAP_DISPATCH with message "error code -2" upon rule reload completion
+Bug #3006: improve rule keyword alproto registration
+Bug #3007: rust: updated libc crate causes depration warnings
+Bug #3009: Fixes warning about size of integers in string formats
+Bug #3051: mingw/msys: compile errors
+Bug #3054: Build failure with --enable-rust-debug
+Bug #3070: coverity warnings in protocol detection
+Bug #3072: Rust nightly warning
+Bug #3076: Suricata sometimes doesn't store the vlan id when vlan.use-for-tracking is false
+Bug #3089: Fedora rawhide af-packet compilation err
+Bug #3098: rule-reloads Option?
+Bug #3111: ftp warnings during compile
+Bug #3112: engine-analysis warning on http_content_type
+Bug #3133: http_accept_enc warning with engine-analysis
+Bug #3136: rust: Remove the unneeded macros
+Bug #3138: Don't install Suricata provided rules to /etc/suricata/rules as part of make install-rules.
+Bug #3140: ftp: compile warnings on gcc-8
+Bug #3158: 'wrong thread' tracking inaccurate for bridging IPS modes
+Bug #3162: TLS Lua output does not work without TLS log
+Bug #3169: tls: out of bounds read (5.x)
+Bug #3171: defrag: out of bounds read (5.x)
+Bug #3176: ipv4: ts field decoding oob read (5.x)
+Bug #3177: suricata is logging tls log repeatedly if custom mode is enabled
+Bug #3185: decode/der: crafted input can lead to resource starvation (5.x)
+Bug #3189: NSS Shutdown triggers crashes in test mode (5.x)
+Optimization #879: update configure.ac with autoupdate
+Optimization #1218: BoyerMooreNocase could avoid tolower() call
+Optimization #1220: Boyer Moore SPM pass in ctx instead of indivual bmBc and bmBg
+Optimization #2602: add keywords to --list-keywords output
+Optimization #2843: suricatact/filestore/prune: check that directory is a filestore directory before removing files
+Optimization #2848: Rule reload when run with -s or -S arguments
+Optimization #2991: app-layer-event keyword tx handling
+Optimization #3005: make sure DetectBufferSetActiveList return codes are always checked
+Optimization #3077: FTP parser command lookup
+Optimization #3085: Suggest more appropriate location to store eBPF binaries
+Optimization #3137: Make description of all keywords consistent and pretty
+Task #2629: tracking: Rust 2018 edition
+Task #2974: detect: check all keyword urls
+Task #3014: Missing documentation for "flags" option
+Task #3092: Date of revision should also be a part of info from suricata -v
+Task #3135: counters: new default for decoder events
+Task #3141: libhtp 0.5.31
+
+5.0.0-beta1 -- 2019-04-30
+
+Feature #884: add man pages
+Feature #984: libhtp HTP_AUTH_UNRECOGNIZED
+Feature #1970: json: make libjansson mandatory
+Feature #2081: document byte_test
+Feature #2082: document byte_jump
+Feature #2083: document byte_extract
+Feature #2282: event log aka weird.log
+Feature #2332: Support for common http response headers - Location and Server
+Feature #2421: add system mode and user mode
+Feature #2459: Support of FTP active mode
+Feature #2484: no stream events after known pkt loss in flow
+Feature #2485: http: log byte range with file extraction
+Feature #2507: Make Rust mandatory
+Feature #2561: Add possibility for smtp raw extraction
+Feature #2563: Add dump of all headers in http eve-log
+Feature #2572: extend protocol detection to specify flow direction
+Feature #2741: netmap: add support for lb and vale switches
+Feature #2766: Simplified Napatech Configuration
+Feature #2820: pcap multi dev support for Windows (5.0.x)
+Feature #2837: Add more custom HTTP Header values for HTTP JSON Logging
+Feature #2895: OpenBSD pledge support
+Feature #2897: update http_content_type and others to new style sticky buffers
+Feature #2914: modernize tls sticky buffers
+Feature #2930: http_protocol: use mpm and content inspect v2 apis
+Feature #2937: sticky buffer access from lua script
+Optimization #2530: Print matching rule SID in filestore meta file
+Optimization #2632: remove C implementations where we have Rust as well
+Optimization #2793: Python 3 support for python tools
+Optimization #2808: Prefer Python 3 in ./configure
+Bug #1013: command line parsing
+Bug #1324: vlan tag in eve.json
+Bug #1427: configure with libnss and libnspr
+Bug #1694: unix-socket reading 0 size pcap
+Bug #1860: 2220005: SURICATA SMTP bdat chunk len exceeded when using SMTP connection caching
+Bug #2057: eve.json flow logs do not contain in_iface
+Bug #2432: engine-analysis does not print out the tls buffers
+Bug #2503: rust: nom 4.2 released
+Bug #2527: FTP file extraction only working in passive mode
+Bug #2605: engine-analysis warning on PCRE
+Bug #2733: rust/mingw: libc::IPPROTO_* not defined
+Bug #2751: Engine unable to disable detect thread, Killing engine. (in libpcap mode)
+Bug #2775: dns v1/2 with rust results in less app layer data available in the alert record (for dns related alerts/rules)
+Bug #2797: configure.ac: broken --{enable,disable}-xxx options
+Bug #2798: --engine-analysis is unaware of http_host buffer
+Bug #2800: Undocumented commands for suricatasc
+Bug #2812: suricatasc multiple python issues
+Bug #2813: suricatasc: failure with extra commands
+Bug #2817: Syricata.yaml encrypt-handling instead encryption-handling
+Bug #2821: netmap/afpacket IPS: stream.inline: auto broken (5.0.x)
+Bug #2822: SSLv3 - AddressSanitizer heap-buffer-overflow (5.0.x)
+Bug #2833: mem leak - rules loading hunt rules
+Bug #2838: 4.1.x gcc 9 compilation warnings
+Bug #2844: alignment issues in dnp3
+Bug #2846: IPS mode crash under load (5.0.x)
+Bug #2857: nfq asan heap-use-after-free error
+Bug #2877: rust: windows build fails in gen-c-headers.py
+Bug #2889: configure doesn't display additional information for missing requirements
+Bug #2896: smb 1 create andx request does not parse the filename correctly (master)
+Bug #2899: Suricata 4.1.2 and up to 5.x Dev branch - Make compile issue when using PF_ring library on Redhat only
+Bug #2901: pcap logging with lz4 coverity warning (master)
+Bug #2909: segfault on logrotation when the files cannot be opened
+Bug #2912: memleaks in nflog
+Bug #2915: modernize ssh sticky buffers
+Bug #2921: chmod file mode warning expressed in incorrect base
+Bug #2929: error messages regarding byte jump and byte extract
+Bug #2944: ssh: heap buffer overflow (master)
+Bug #2945: mpls: heapbuffer overflow in file decode-mpls.c (master)
+Bug #2946: decode-ethernet: heapbuffer overflow in file decode-ethernet.c (master)
+Bug #2947: rust/dhcp: panic in dhcp parser (master)
+Bug #2948: mpls: cast of misaligned data leads to undefined behvaviour (master)
+Bug #2949: rust/ftp: panic in ftp parser (master)
+Bug #2950: rust/nfs: integer underflow (master)
+Task #2297: deprecate: dns.log
+Task #2376: deprecate: files-json.log
+Task #2379: deprecate: Tilera / Tile support
+Task #2849: Remove C SMB parser.
+Task #2850: Remove C DNS parsers.
+
+4.1.2 -- 2018-12-21
+
+Feature #1863: smtp: improve pipelining support
+Feature #2748: bundle libhtp 0.5.29
+Feature #2749: bundle suricata-update 1.0.3
+Bug #2682: python-yaml Not Listed As Ubuntu Prerequisite
+Bug #2736: DNS Golden Transaction ID - detection bypass
+Bug #2745: Invalid detect-engine config could lead to segfault
+Bug #2752: smb: logs for IOCTL and DCERPC have tree_id value of 0
+
+4.1.1 -- 2018-12-17
+
+Feature #2637: af-packet: improve error output for BPF loading failure
+Feature #2671: Add Log level to suricata.log when using JSON type
+Bug #2502: suricata.c ConfigGetCaptureValue - PCAP/AFP fallthrough to strip_trailing_plus
+Bug #2528: krb parser not always parsing tgs responses
+Bug #2633: Improve errors handling in AF_PACKET
+Bug #2653: llc detection failure in configure.ac
+Bug #2677: coverity: ja3 potential memory leak
+Bug #2679: build with profiling enabled on generates compile warnings
+Bug #2704: DNSv1 for Rust enabled builds.
+Bug #2705: configure: Test for PyYAML and disable suricata-update if not installed.
+Bug #2716: Stats interval are 1 second too early each tick
+Bug #2717: nfs related panic in 4.1
+Bug #2719: Failed Assertion, Suricata Abort - util-mpm-hs.c line 163 (4.1.x)
+Bug #2723: dns v2 json output should always set top-level rrtype in responses
+Bug #2730: rust/dns/lua - The Lua calls for DNS values when using Rust don't behave the same as the C implementation.
+Bug #2731: multiple instances of transaction loggers are broken
+Bug #2734: unix runmode deadlock when using too many threads
+
+4.1.0 -- 2018-11-06
+
+Bug #2467: 4.1beta1 - non rust builds with SMB enabled
+Bug #2657: smtp segmentation fault
+Bug #2663: libhtp 0.5.28
+
+4.1.0-rc2 -- 2018-10-16
+
+Feature #2279: TLS 1.3 decoding, SNI extraction and logging
+Feature #2562: Add http_port in http eve-log if specified in the hostname
+Feature #2567: multi-tenancy: add 'device' selector
+Feature #2638: community flow id
+Optimization #2579: tcp: SegmentSmack
+Optimization #2580: ip: FragmentSmack
+Bug #2100: af_packet: High latency
+Bug #2212: profiling: app-layer profiling shows time spent in HTTP on UDP
+Bug #2419: Increase size of length of Decoder handlers from uint16 to uint32
+Bug #2491: async-oneside and midstream not working as expected
+Bug #2522: The cross-effects of rules on each other, without the use of flowbits.
+Bug #2541: detect-parse: missing space in error message
+Bug #2552: "Drop" action is logged as "allowed" in af_packet and netmap modes
+Bug #2554: suricata does not detect a web-attack
+Bug #2555: Ensure strings in eve-log are json-encodable
+Bug #2558: negated fileext and filename do not work as expected
+Bug #2559: DCE based rule false positives
+Bug #2566: memleak: applayer dhcp with 4.1.0-dev (rev 9370805)
+Bug #2570: Signature affecting another's ability to detect and alert
+Bug #2571: coredump: liballoc/vec.rs dhcp
+Bug #2573: prefilter keyword doesn't work when detect.prefilter.default=mpm
+Bug #2574: prefilter keyword as alias for fast_pattern is broken
+Bug #2603: memleak/coredump: Ja3BufferInit
+Bug #2604: memleak: DetectEngineStateAlloc with ipsec-events.rules
+Bug #2606: File descriptor leak in af-packet mode
+Bug #2615: processing of nonexistent pcap 
+
+4.1.0-rc1 -- 2018-07-20
+
+Feature #2292: flow: add icmpv4 and improve icmpv6 flow handling
+Feature #2298: pcap: store pcaps in compressed form
+Feature #2416: Increase XFF coverage to files and http log
+Feature #2417: Add Option to Delete Pcap Files After Processing
+Feature #2455: Add WinDivert source to Windows builds
+Feature #2456: LZ4 compression for pcap logs
+Optimization #2461: Let user to explicit disable libnss and libnspr support
+Bug #1929: yaml: ConfYamlHandleInclude memleak
+Bug #2090: Rule-reload in multi-tenancy is buggy
+Bug #2217: event_type flow is missing icmpv4 (while it has icmpv6) info wherever available
+Bug #2463: memleak: gitmaster flash decompression - 4.1.0-dev (rev efdc592)
+Bug #2469: The autoconf script throws and error when af_packet is enabled and then continues
+Bug #2481: integer overflow caused by casting uin32 to uint16 in detection
+Bug #2492: Inverted IP params in fileinfo events
+Bug #2496: gcc 8 warnings
+Bug #2498: Lua file output script causes a segfault when protocol is not HTTP
+Bug #2501: Suricata stops inspecting TCP stream if a TCP RST was met
+Bug #2504: ntp parser update cause build failure
+Bug #2505: getrandom prevents any suricata start commands on more later OS's
+Bug #2511: Suricata gzip unpacker bypass
+Bug #2515: memleak: when using smb rules without rust
+Bug #2516: Dead lock caused by unix command register-tenant
+Bug #2518: Tenant rules reload completely broken in 4.x.x
+Bug #2520: Invalid application layer logging in alert for DNS
+Bug #2521: rust: dns warning during compile
+Bug #2536: libhtp 0.5.27
+Bug #2542: ssh out of bounds read
+Bug #2543: enip out of bounds read
+
+4.1.0-beta1 -- 2018-03-22
+
+Feature #550: Extract file attachments from FTP
+Feature #646: smb log feature to be introduced
+Feature #719: finish/enable smb2 app layer parser
+Feature #723: Add support for smb 3
+Feature #724: Prevent resetting in UNIX socket mode
+Feature #735: Introduce content_len keyword
+Feature #741: Introduce endswith keyword
+Feature #742: startswith keyword
+Feature #1006: transformation api
+Feature #1198: more compact dns logging
+Feature #1201: file-store metadata in JSON format
+Feature #1386: offline: add pcap file name to EVE
+Feature #1458: unix-socket - make rule load errs available
+Feature #1476: Suricata Unix socket PCAP processing stats should not need to reset after each run
+Feature #1579: Support Modbus Unit Identifier
+Feature #1585: unix-socket: improve information regarding ruleset
+Feature #1600: flash file decompression for file_data
+Feature #1678: open umask settings or make them configurable
+Feature #1948: allow filestore name configuration options
+Feature #1949: only write unique files
+Feature #2020: eve: add body of signature to eve.json alert
+Feature #2062: tls: reimplement tls.fingerprint
+Feature #2076: Strip whitespace from buffers
+Feature #2086: DNS answer for a NS containing multiple name servers should only be one line
+Feature #2142: filesize: support other units than only bytes
+Feature #2192: JA3 TLS client fingerprinting
+Feature #2199: DNS answer events compacted
+Feature #2222: Batch submission of PCAPs over the socket
+Feature #2253: Log rule metadata in alert event
+Feature #2285: modify memcaps over unix socket
+Feature #2295: decoder: support PCAP LINKTYPE_IPV4
+Feature #2299: pcap: read directory with pcaps from the commandline
+Feature #2303: file-store enhancements (aka file-store v2): deduplication; hash-based naming; json metadata and cleanup tooling
+Feature #2352: eve: add "metadata" field to alert (rework of vars)
+Feature #2382: deprecate: CUDA support
+Feature #2399: eBPF and XDP bypass for AF_PACKET capture method
+Feature #2464: tftp logging
+Optimization #2193: random: support getrandom(2) if available
+Optimization #2302: rule parsing: faster parsing by not using pcre
+Bug #993: libhtp upgrade to handle responses first
+Bug #1503: lua output setup failure does not exit engine with --init-errors-fatal
+Bug #1788: af-packet coverity warning
+Bug #1842: Duplicated analyzer in Prelude alert
+Bug #1904: modbus: duplicate alerts / detection unaware of direction
+Bug #2202: BUG_ON asserts in AppLayerIncFlowCounter
+Bug #2229: mem leak AFP with 4.0.0-dev (rev 1180687)
+Bug #2240: suricatasc dump-counters returns error when return message is larger than 4096
+Bug #2252: Rule parses in 4.0 when flow to client is set and http_client_body is used.
+Bug #2258: rate_filter inconsistency: triggered after "count" detections when by_rule, and after count+1 detections when by_src/by_dst.
+Bug #2268: Don't printf util-enum errors
+Bug #2288: Suricata segfaults on ICMP and flowint check
+Bug #2294: rules: depth < content rules not rejected (master)
+Bug #2307: segfault in http_start with 4.1.0-dev (rev 83f220a)
+Bug #2335: conf: stack-based buffer-overflow in ParseFilename
+Bug #2345: conf: Memory-leak in DetectAddressTestConfVars
+Bug #2346: conf: NULL-pointer dereference in ConfUnixSocketIsEnable
+Bug #2347: conf: use of NULL-pointer in DetectLoadCompleteSigPath
+Bug #2349: conf: multiple NULL-pointer dereferences in FlowInitConfig
+Bug #2353: Command Line Options Ignored with pcap-file-continuous setting
+Bug #2354: conf: multiple NULL-pointer dereferences in StreamTcpInitConfig
+Bug #2356: coverity issues in new pcap file/directory handling
+Bug #2360: possible deadlock with signal handling
+Bug #2364: rust/dns: logging missing string versions of rtypes and rcodes
+Bug #2365: rust/dns: flooded by 'LogDnsLogger not implemented for Rust DNS'
+Bug #2367: Conf: Multipe NULL-pointer dereferences in HostInitConfig
+Bug #2368: Conf: Multipe NULL-pointer dereferences after ConfGetBool in StreamTcpInitConfig
+Bug #2370: Conf: Multipe NULL-pointer dereferences in PostConfLoadedSetup
+Bug #2390: mingw linker error with rust
+Bug #2391: libhtp 0.5.26
+Bug #2394: Pcap Directory May Miss Files
+Bug #2397: Call to panic()! macro in Rust NFS decoder causes crash on malformed NFS traffic
+Bug #2398: Lua keyword cmd help documentation pointing to old docs
+Bug #2402: http_header_names doesn't operate as documented
+Bug #2403: Crash for offline pcap mode when running in single mode
+Bug #2407: Fix timestamp offline when pcap timestamp is zero
+Bug #2408: fix print backslash in PrintRawUriFp
+Bug #2414: NTP parser registration frees used memory
+Bug #2418: Skip configuration "include" nodes when file is empty
+Bug #2420: Use pthread_sigmask instead of sigprogmask for signal handling
+Bug #2425: DNP3 memcpy buffer overflow
+Bug #2427: Suricata 3.x.x and 4.x.x do not parse HTTP responses if tcp data was sent before 3-way-handshake completed
+Bug #2430: http eve log data source/dest flip
+Bug #2437: rust/dns: Core Dump with malformed traffic
+Bug #2442: der parser: bad input consumes cpu and memory
+Bug #2446: http bodies / file_data: thread space creation writing out of bounds (master)
+Bug #2451: Missing Files Will Cause Pcap Thread to No Longer Run in Unix Socket Mode
+Bug #2454: master - suricata.c:2473-2474 - SIGUSR2 not wrapped in #ifndef OS_WIN32
+Bug #2466: [4.1beta1] Messages with SC_LOG_CONFIG level are logged to syslog with EMERG priority
+
+4.0.1 -- 2017-10-18
+
+Bug #2050: TLS rule mixes up server and client certificates
+Bug #2064: Rules with dual classtype do not error
+Bug #2074: detect msg: memory leak
+Bug #2102: Rules with dual sid do not error
+Bug #2103: Rules with dual rev do not error
+Bug #2151: The documentation does not reflect current suricata.yaml regarding cpu-affinity
+Bug #2194: rust/nfs: sigabrt/rust panic - 4.0.0-dev (rev fc22943)
+Bug #2197: rust build with lua enabled fails on x86
+Bug #2201: af_packet: suricata leaks memory with use-mmap enabled and incorrect BPF filter
+Bug #2207: DNS UDP "Response" parsing recording an incorrect value
+Bug #2208: mis-structured JSON stats output if interface name is shortened
+Bug #2226: improve error message if stream memcaps too low
+Bug #2228: enforcing specific number of threads with autofp does not seem to work
+Bug #2244: detect state uses broken offset logic (4.0.x)
+Feature #2114: Redis output: add RPUSH support
+Feature #2152: Packet and Drop Counters for Napatech
+
 4.0.0 -- 2017-07-27
 
 Feature #2138: Create a sample systemd service file.

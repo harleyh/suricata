@@ -99,6 +99,8 @@ static void DetectByteExtractFree(void *);
 void DetectByteExtractRegister(void)
 {
     sigmatch_table[DETECT_BYTE_EXTRACT].name = "byte_extract";
+    sigmatch_table[DETECT_BYTE_EXTRACT].desc = "extract <num of bytes> at a particular <offset> and store it in <var_name>";
+    sigmatch_table[DETECT_BYTE_EXTRACT].url = DOC_URL DOC_VERSION "/rules/payload-keywords.html#byte-extract";
     sigmatch_table[DETECT_BYTE_EXTRACT].Match = NULL;
     sigmatch_table[DETECT_BYTE_EXTRACT].Setup = DetectByteExtractSetup;
     sigmatch_table[DETECT_BYTE_EXTRACT].Free = DetectByteExtractFree;
@@ -108,12 +110,12 @@ void DetectByteExtractRegister(void)
 }
 
 int DetectByteExtractDoMatch(DetectEngineThreadCtx *det_ctx, const SigMatchData *smd,
-                             const Signature *s, uint8_t *payload,
+                             const Signature *s, const uint8_t *payload,
                              uint16_t payload_len, uint64_t *value,
                              uint8_t endian)
 {
     DetectByteExtractData *data = (DetectByteExtractData *)smd->ctx;
-    uint8_t *ptr = NULL;
+    const uint8_t *ptr = NULL;
     int32_t len = 0;
     uint64_t val = 0;
     int extbytes;
@@ -164,8 +166,8 @@ int DetectByteExtractDoMatch(DetectEngineThreadCtx *det_ctx, const SigMatchData 
                 SCLogDebug("No Numeric value");
                 return 0;
             } else {
-                SCLogError(SC_ERR_INVALID_NUM_BYTES, "Error extracting %d "
-                        "bytes of string data: %d", data->nbytes, extbytes);
+                SCLogDebug("error extracting %d bytes of string data: %d",
+                        data->nbytes, extbytes);
                 return -1;
             }
         }
@@ -174,8 +176,8 @@ int DetectByteExtractDoMatch(DetectEngineThreadCtx *det_ctx, const SigMatchData 
                           BYTE_BIG_ENDIAN : BYTE_LITTLE_ENDIAN;
         extbytes = ByteExtractUint64(&val, endianness, data->nbytes, ptr);
         if (extbytes != data->nbytes) {
-            SCLogError(SC_ERR_INVALID_NUM_BYTES, "Error extracting %d bytes "
-                   "of numeric data: %d\n", data->nbytes, extbytes);
+            SCLogDebug("error extracting %d bytes of numeric data: %d",
+                    data->nbytes, extbytes);
             return 0;
         }
     }
@@ -193,7 +195,7 @@ int DetectByteExtractDoMatch(DetectEngineThreadCtx *det_ctx, const SigMatchData 
     det_ctx->buffer_offset = ptr - payload;
 
     *value = val;
-
+    SCLogDebug("extracted value is %"PRIu64, val);
     return 1;
 }
 
@@ -538,7 +540,8 @@ static int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, const c
             sm_list = DETECT_SM_LIST_PMATCH;
         }
 
-        s->alproto = ALPROTO_DCERPC;
+        if (DetectSignatureSetAppProto(s, ALPROTO_DCERPC) < 0)
+            goto error;
         s->flags |= SIG_FLAG_APPLAYER;
 
     } else if (data->flags & DETECT_BYTE_EXTRACT_FLAG_RELATIVE) {
@@ -641,15 +644,12 @@ static void DetectByteExtractFree(void *ptr)
  */
 SigMatch *DetectByteExtractRetrieveSMVar(const char *arg, const Signature *s)
 {
-    DetectByteExtractData *bed = NULL;
-    int list;
-    const int nlists = DetectBufferTypeMaxId();
-
-    for (list = 0; list < nlists; list++) {
+    const int nlists = s->init_data->smlists_array_size;
+    for (int list = 0; list < nlists; list++) {
         SigMatch *sm = s->init_data->smlists[list];
         while (sm != NULL) {
             if (sm->type == DETECT_BYTE_EXTRACT) {
-                bed = (DetectByteExtractData *)sm->ctx;
+                const DetectByteExtractData *bed = (const DetectByteExtractData *)sm->ctx;
                 if (strcmp(bed->name, arg) == 0) {
                     return sm;
                 }

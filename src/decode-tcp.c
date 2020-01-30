@@ -47,18 +47,20 @@
     (dst).len  = (src).len; \
     (dst).data = (src).data
 
-static int DecodeTCPOptions(Packet *p, uint8_t *pkt, uint16_t len)
+static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
 {
     uint8_t tcp_opt_cnt = 0;
     TCPOpt tcp_opts[TCP_OPTMAX];
 
-    uint16_t plen = len;
+    uint16_t plen = pktlen;
     while (plen)
     {
+        const uint8_t type = *pkt;
+
         /* single byte options */
-        if (*pkt == TCP_OPT_EOL) {
+        if (type == TCP_OPT_EOL) {
             break;
-        } else if (*pkt == TCP_OPT_NOP) {
+        } else if (type == TCP_OPT_NOP) {
             pkt++;
             plen--;
 
@@ -68,27 +70,26 @@ static int DecodeTCPOptions(Packet *p, uint8_t *pkt, uint16_t len)
                 break;
             }
 
+            const uint8_t olen = *(pkt+1);
+
             /* we already know that the total options len is valid,
              * so here the len of the specific option must be bad.
              * Also check for invalid lengths 0 and 1. */
-            if (unlikely(*(pkt+1) > plen || *(pkt+1) < 2)) {
+            if (unlikely(olen > plen || olen < 2)) {
                 ENGINE_SET_INVALID_EVENT(p, TCP_OPT_INVALID_LEN);
-                return -1;
+                return;
             }
 
-            tcp_opts[tcp_opt_cnt].type = *pkt;
-            tcp_opts[tcp_opt_cnt].len  = *(pkt+1);
-            if (plen > 2)
-                tcp_opts[tcp_opt_cnt].data = (pkt+2);
-            else
-                tcp_opts[tcp_opt_cnt].data = NULL;
+            tcp_opts[tcp_opt_cnt].type = type;
+            tcp_opts[tcp_opt_cnt].len  = olen;
+            tcp_opts[tcp_opt_cnt].data = (olen > 2) ? (pkt+2) : NULL;
 
             /* we are parsing the most commonly used opts to prevent
              * us from having to walk the opts list for these all the
              * time. */
-            switch (tcp_opts[tcp_opt_cnt].type) {
+            switch (type) {
                 case TCP_OPT_WS:
-                    if (tcp_opts[tcp_opt_cnt].len != TCP_OPT_WS_LEN) {
+                    if (olen != TCP_OPT_WS_LEN) {
                         ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
                         if (p->tcpvars.ws.type != 0) {
@@ -99,7 +100,7 @@ static int DecodeTCPOptions(Packet *p, uint8_t *pkt, uint16_t len)
                     }
                     break;
                 case TCP_OPT_MSS:
-                    if (tcp_opts[tcp_opt_cnt].len != TCP_OPT_MSS_LEN) {
+                    if (olen != TCP_OPT_MSS_LEN) {
                         ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
                         if (p->tcpvars.mss.type != 0) {
@@ -110,7 +111,7 @@ static int DecodeTCPOptions(Packet *p, uint8_t *pkt, uint16_t len)
                     }
                     break;
                 case TCP_OPT_SACKOK:
-                    if (tcp_opts[tcp_opt_cnt].len != TCP_OPT_SACKOK_LEN) {
+                    if (olen != TCP_OPT_SACKOK_LEN) {
                         ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
                         if (p->tcpvars.sackok.type != 0) {
@@ -121,7 +122,7 @@ static int DecodeTCPOptions(Packet *p, uint8_t *pkt, uint16_t len)
                     }
                     break;
                 case TCP_OPT_TS:
-                    if (tcp_opts[tcp_opt_cnt].len != TCP_OPT_TS_LEN) {
+                    if (olen != TCP_OPT_TS_LEN) {
                         ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
                         if (p->tcpvars.ts_set) {
@@ -129,17 +130,18 @@ static int DecodeTCPOptions(Packet *p, uint8_t *pkt, uint16_t len)
                         } else {
                             uint32_t values[2];
                             memcpy(&values, tcp_opts[tcp_opt_cnt].data, sizeof(values));
-                            p->tcpvars.ts_val = ntohl(values[0]);
-                            p->tcpvars.ts_ecr = ntohl(values[1]);
+                            p->tcpvars.ts_val = SCNtohl(values[0]);
+                            p->tcpvars.ts_ecr = SCNtohl(values[1]);
                             p->tcpvars.ts_set = TRUE;
                         }
                     }
                     break;
                 case TCP_OPT_SACK:
-                    SCLogDebug("SACK option, len %u", tcp_opts[tcp_opt_cnt].len);
-                    if (tcp_opts[tcp_opt_cnt].len < TCP_OPT_SACK_MIN_LEN ||
-                            tcp_opts[tcp_opt_cnt].len > TCP_OPT_SACK_MAX_LEN ||
-                            !((tcp_opts[tcp_opt_cnt].len - 2) % 8 == 0))
+                    SCLogDebug("SACK option, len %u", olen);
+                    if ((olen != 2) &&
+                           (olen < TCP_OPT_SACK_MIN_LEN ||
+                            olen > TCP_OPT_SACK_MAX_LEN ||
+                            !((olen - 2) % 8 == 0)))
                     {
                         ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
@@ -150,17 +152,50 @@ static int DecodeTCPOptions(Packet *p, uint8_t *pkt, uint16_t len)
                         }
                     }
                     break;
+                case TCP_OPT_TFO:
+                    SCLogDebug("TFO option, len %u", olen);
+                    if ((olen != 2) &&
+                           (olen < TCP_OPT_TFO_MIN_LEN ||
+                            olen > TCP_OPT_TFO_MAX_LEN ||
+                            !((olen - 2) % 8 == 0)))
+                    {
+                        ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
+                    } else {
+                        if (p->tcpvars.tfo.type != 0) {
+                            ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
+                        } else {
+                            SET_OPTS(p->tcpvars.tfo, tcp_opts[tcp_opt_cnt]);
+                        }
+                    }
+                    break;
+                /* experimental options, could be TFO */
+                case TCP_OPT_EXP1:
+                case TCP_OPT_EXP2:
+                    SCLogDebug("TCP EXP option, len %u", olen);
+                    if (olen == 4 || olen == 12) {
+                        uint16_t magic = SCNtohs(*(uint16_t *)tcp_opts[tcp_opt_cnt].data);
+                        if (magic == 0xf989) {
+                            if (p->tcpvars.tfo.type != 0) {
+                                ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
+                            } else {
+                                SET_OPTS(p->tcpvars.tfo, tcp_opts[tcp_opt_cnt]);
+                                p->tcpvars.tfo.type = TCP_OPT_TFO; // treat as regular TFO
+                            }
+                        }
+                    } else {
+                        ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
+                    }
+                    break;
             }
 
-            pkt += tcp_opts[tcp_opt_cnt].len;
-            plen -= (tcp_opts[tcp_opt_cnt].len);
+            pkt += olen;
+            plen -= olen;
             tcp_opt_cnt++;
         }
     }
-    return 0;
 }
 
-static int DecodeTCPPacket(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t len)
+static int DecodeTCPPacket(ThreadVars *tv, Packet *p, const uint8_t *pkt, uint16_t len)
 {
     if (unlikely(len < TCP_HEADER_LEN)) {
         ENGINE_SET_INVALID_EVENT(p, TCP_PKT_TOO_SMALL);
@@ -190,28 +225,29 @@ static int DecodeTCPPacket(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t len
 
     p->proto = IPPROTO_TCP;
 
-    p->payload = pkt + hlen;
+    p->payload = (uint8_t *)pkt + hlen;
     p->payload_len = len - hlen;
 
     return 0;
 }
 
-int DecodeTCP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, uint16_t len, PacketQueue *pq)
+int DecodeTCP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
+        const uint8_t *pkt, uint16_t len, PacketQueue *pq)
 {
     StatsIncr(tv, dtv->counter_tcp);
 
-    if (unlikely(DecodeTCPPacket(tv, p,pkt,len) < 0)) {
+    if (unlikely(DecodeTCPPacket(tv, p, pkt,len) < 0)) {
         SCLogDebug("invalid TCP packet");
         p->tcph = NULL;
         return TM_ECODE_FAILED;
     }
 
 #ifdef DEBUG
-    SCLogDebug("TCP sp: %" PRIu32 " -> dp: %" PRIu32 " - HLEN: %" PRIu32 " LEN: %" PRIu32 " %s%s%s%s%s",
+    SCLogDebug("TCP sp: %" PRIu32 " -> dp: %" PRIu32 " - HLEN: %" PRIu32 " LEN: %" PRIu32 " %s%s%s%s%s%s",
         GET_TCP_SRC_PORT(p), GET_TCP_DST_PORT(p), TCP_GET_HLEN(p), len,
         TCP_HAS_SACKOK(p) ? "SACKOK " : "", TCP_HAS_SACK(p) ? "SACK " : "",
         TCP_HAS_WSCALE(p) ? "WS " : "", TCP_HAS_TS(p) ? "TS " : "",
-        TCP_HAS_MSS(p) ? "MSS " : "");
+        TCP_HAS_MSS(p) ? "MSS " : "", TCP_HAS_TFO(p) ? "TFO " : "");
 #endif
 
     FlowSetupPacket(p);
@@ -494,7 +530,7 @@ static int TCPGetSackTest01(void)
         goto end;
     }
 
-    uint8_t *sackptr = TCP_GET_SACK_PTR(p);
+    const uint8_t *sackptr = TCP_GET_SACK_PTR(p);
     if (sackptr == NULL) {
         printf("no sack data: ");
         goto end;

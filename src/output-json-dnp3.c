@@ -43,18 +43,15 @@
 #include "output-json-dnp3.h"
 #include "output-json-dnp3-objects.h"
 
-#ifdef HAVE_LIBJANSSON
-#include <jansson.h>
-
 typedef struct LogDNP3FileCtx_ {
     LogFileCtx *file_ctx;
     uint32_t    flags;
     uint8_t     include_object_data;
+    OutputJsonCommonSettings cfg;
 } LogDNP3FileCtx;
 
 typedef struct LogDNP3LogThread_ {
     LogDNP3FileCtx *dnp3log_ctx;
-    uint32_t        count;
     MemBuffer      *buffer;
 } LogDNP3LogThread;
 
@@ -312,10 +309,13 @@ static int JsonDNP3LoggerToServer(ThreadVars *tv, void *thread_data,
 
     MemBufferReset(buffer);
     if (tx->has_request && tx->request_done) {
-        json_t *js = CreateJSONHeader((Packet *)p, 1, "dnp3");
+        json_t *js = CreateJSONHeader(p, LOG_DIR_FLOW, "dnp3");
         if (unlikely(js == NULL)) {
             return TM_ECODE_OK;
         }
+
+        JsonAddCommonOptions(&thread->dnp3log_ctx->cfg, p, f, js);
+
         json_t *dnp3js = JsonDNP3LogRequest(tx);
         if (dnp3js != NULL) {
             json_object_set_new(js, "dnp3", dnp3js);
@@ -338,10 +338,13 @@ static int JsonDNP3LoggerToClient(ThreadVars *tv, void *thread_data,
 
     MemBufferReset(buffer);
     if (tx->has_response && tx->response_done) {
-        json_t *js = CreateJSONHeader((Packet *)p, 1, "dnp3");
+        json_t *js = CreateJSONHeader(p, LOG_DIR_FLOW, "dnp3");
         if (unlikely(js == NULL)) {
             return TM_ECODE_OK;
         }
+
+        JsonAddCommonOptions(&thread->dnp3log_ctx->cfg, p, f, js);
+
         json_t *dnp3js = JsonDNP3LogResponse(tx);
         if (dnp3js != NULL) {
             json_object_set_new(js, "dnp3", dnp3js);
@@ -363,20 +366,22 @@ static void OutputDNP3LogDeInitCtxSub(OutputCtx *output_ctx)
 
 #define DEFAULT_LOG_FILENAME "dnp3.json"
 
-static OutputCtx *OutputDNP3LogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputInitResult OutputDNP3LogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
-    AlertJsonThread *ajt = parent_ctx->data;
+    OutputInitResult result = { NULL, false };
+    OutputJsonCtx *json_ctx = parent_ctx->data;
 
     LogDNP3FileCtx *dnp3log_ctx = SCCalloc(1, sizeof(*dnp3log_ctx));
     if (unlikely(dnp3log_ctx == NULL)) {
-        return NULL;
+        return result;
     }
-    dnp3log_ctx->file_ctx = ajt->file_ctx;
+    dnp3log_ctx->file_ctx = json_ctx->file_ctx;
+    dnp3log_ctx->cfg = json_ctx->cfg;
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(*output_ctx));
     if (unlikely(output_ctx == NULL)) {
         SCFree(dnp3log_ctx);
-        return NULL;
+        return result;
     }
     output_ctx->data = dnp3log_ctx;
     output_ctx->DeInit = OutputDNP3LogDeInitCtxSub;
@@ -385,10 +390,11 @@ static OutputCtx *OutputDNP3LogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 
     AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_DNP3);
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
-#define OUTPUT_BUFFER_SIZE 65535
 
 static TmEcode JsonDNP3LogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
@@ -403,7 +409,7 @@ static TmEcode JsonDNP3LogThreadInit(ThreadVars *t, const void *initdata, void *
         return TM_ECODE_FAILED;
     }
 
-    thread->buffer = MemBufferCreateNew(OUTPUT_BUFFER_SIZE);
+    thread->buffer = MemBufferCreateNew(JSON_OUTPUT_BUFFER_SIZE);
     if (unlikely(thread->buffer == NULL)) {
         SCFree(thread);
         return TM_ECODE_FAILED;
@@ -431,20 +437,12 @@ static TmEcode JsonDNP3LogThreadDeinit(ThreadVars *t, void *data)
 void JsonDNP3LogRegister(void)
 {
     /* Register direction aware eve sub-modules. */
-    OutputRegisterTxSubModuleWithProgress(LOGGER_JSON_DNP3, "eve-log",
+    OutputRegisterTxSubModuleWithProgress(LOGGER_JSON_DNP3_TS, "eve-log",
         "JsonDNP3Log", "eve-log.dnp3", OutputDNP3LogInitSub, ALPROTO_DNP3,
         JsonDNP3LoggerToServer, 0, 1, JsonDNP3LogThreadInit,
         JsonDNP3LogThreadDeinit, NULL);
-    OutputRegisterTxSubModuleWithProgress(LOGGER_JSON_DNP3, "eve-log",
+    OutputRegisterTxSubModuleWithProgress(LOGGER_JSON_DNP3_TC, "eve-log",
         "JsonDNP3Log", "eve-log.dnp3", OutputDNP3LogInitSub, ALPROTO_DNP3,
         JsonDNP3LoggerToClient, 1, 1, JsonDNP3LogThreadInit,
         JsonDNP3LogThreadDeinit, NULL);
 }
-
-#else
-
-void JsonDNP3LogRegister (void)
-{
-}
-
-#endif

@@ -30,21 +30,16 @@
 /* include pattern matchers */
 #include "util-mpm-ac.h"
 #include "util-mpm-ac-bs.h"
-#include "util-mpm-ac-tile.h"
+#include "util-mpm-ac-ks.h"
 #include "util-mpm-hs.h"
 #include "util-hashlist.h"
 
 #include "detect-engine.h"
-#include "util-cuda.h"
 #include "util-misc.h"
 #include "conf.h"
 #include "conf-yaml-loader.h"
 #include "queue.h"
 #include "util-unittest.h"
-#ifdef __SC_CUDA_SUPPORT__
-#include "util-cuda-handlers.h"
-#include "detect-engine-mpm.h"
-#endif
 #include "util-memcpy.h"
 #ifdef BUILD_HYPERSCAN
 #include "hs.h"
@@ -84,7 +79,7 @@ int32_t MpmFactoryRegisterMpmCtxProfile(DetectEngineCtx *de_ctx, const char *nam
             exit(EXIT_FAILURE);
         }
         memset(item[0].mpm_ctx_ts, 0, sizeof(MpmCtx));
-        item[0].mpm_ctx_ts->global = 1;
+        item[0].mpm_ctx_ts->flags |= MPMCTX_FLAGS_GLOBAL;
 
         /* toclient */
         item[0].mpm_ctx_tc = SCMalloc(sizeof(MpmCtx));
@@ -93,7 +88,7 @@ int32_t MpmFactoryRegisterMpmCtxProfile(DetectEngineCtx *de_ctx, const char *nam
             exit(EXIT_FAILURE);
         }
         memset(item[0].mpm_ctx_tc, 0, sizeof(MpmCtx));
-        item[0].mpm_ctx_tc->global = 1;
+        item[0].mpm_ctx_tc->flags |= MPMCTX_FLAGS_GLOBAL;
 
         /* our id starts from 0 always.  Helps us with the ctx retrieval from
          * the array */
@@ -118,7 +113,7 @@ int32_t MpmFactoryRegisterMpmCtxProfile(DetectEngineCtx *de_ctx, const char *nam
                         exit(EXIT_FAILURE);
                     }
                     memset(items[i].mpm_ctx_ts, 0, sizeof(MpmCtx));
-                    items[i].mpm_ctx_ts->global = 1;
+                    items[i].mpm_ctx_ts->flags |= MPMCTX_FLAGS_GLOBAL;
                 }
                 if (items[i].mpm_ctx_tc == NULL) {
                     items[i].mpm_ctx_tc = SCMalloc(sizeof(MpmCtx));
@@ -127,7 +122,7 @@ int32_t MpmFactoryRegisterMpmCtxProfile(DetectEngineCtx *de_ctx, const char *nam
                         exit(EXIT_FAILURE);
                     }
                     memset(items[i].mpm_ctx_tc, 0, sizeof(MpmCtx));
-                    items[i].mpm_ctx_tc->global = 1;
+                    items[i].mpm_ctx_tc->flags |= MPMCTX_FLAGS_GLOBAL;
                 }
                 return items[i].id;
             }
@@ -156,7 +151,7 @@ int32_t MpmFactoryRegisterMpmCtxProfile(DetectEngineCtx *de_ctx, const char *nam
             exit(EXIT_FAILURE);
         }
         memset(new_item[0].mpm_ctx_ts, 0, sizeof(MpmCtx));
-        new_item[0].mpm_ctx_ts->global = 1;
+        new_item[0].mpm_ctx_ts->flags |= MPMCTX_FLAGS_GLOBAL;
 
         /* toclient */
         new_item[0].mpm_ctx_tc = SCMalloc(sizeof(MpmCtx));
@@ -165,7 +160,7 @@ int32_t MpmFactoryRegisterMpmCtxProfile(DetectEngineCtx *de_ctx, const char *nam
             exit(EXIT_FAILURE);
         }
         memset(new_item[0].mpm_ctx_tc, 0, sizeof(MpmCtx));
-        new_item[0].mpm_ctx_tc->global = 1;
+        new_item[0].mpm_ctx_tc->flags |= MPMCTX_FLAGS_GLOBAL;
 
         new_item[0].id = de_ctx->mpm_ctx_factory_container->no_of_items;
         de_ctx->mpm_ctx_factory_container->no_of_items++;
@@ -258,142 +253,6 @@ void MpmFactoryDeRegisterAllMpmCtxProfiles(DetectEngineCtx *de_ctx)
     return;
 }
 
-#ifdef __SC_CUDA_SUPPORT__
-
-static void MpmCudaConfFree(void *conf)
-{
-    SCFree(conf);
-    return;
-}
-
-static void *MpmCudaConfParse(ConfNode *node)
-{
-    const char *value;
-
-    MpmCudaConf *conf = SCMalloc(sizeof(MpmCudaConf));
-    if (unlikely(conf == NULL))
-        exit(EXIT_FAILURE);
-    memset(conf, 0, sizeof(*conf));
-
-    if (node != NULL)
-        value = ConfNodeLookupChildValue(node, "data-buffer-size-min-limit");
-    else
-        value = NULL;
-    if (value == NULL) {
-        /* default */
-        conf->data_buffer_size_min_limit = UTIL_MPM_CUDA_DATA_BUFFER_SIZE_MIN_LIMIT_DEFAULT;
-    } else if (ParseSizeStringU16(value, &conf->data_buffer_size_min_limit) < 0) {
-        SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, "Invalid entry for %s."
-                   "data-buffer-size-min-limit - \"%s\"", node->name, value);
-        exit(EXIT_FAILURE);
-    }
-
-    if (node != NULL)
-        value = ConfNodeLookupChildValue(node, "data-buffer-size-max-limit");
-    else
-        value = NULL;
-    if (value == NULL) {
-        /* default */
-        conf->data_buffer_size_max_limit = UTIL_MPM_CUDA_DATA_BUFFER_SIZE_MAX_LIMIT_DEFAULT;
-    } else if (ParseSizeStringU16(value, &conf->data_buffer_size_max_limit) < 0) {
-        SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, "Invalid entry for %s."
-                   "data-buffer-size-max-limit - \"%s\"", node->name, value);
-        exit(EXIT_FAILURE);
-    }
-
-    if (node != NULL)
-        value = ConfNodeLookupChildValue(node, "cudabuffer-buffer-size");
-    else
-        value = NULL;
-    if (value == NULL) {
-        /* default */
-        conf->cb_buffer_size = UTIL_MPM_CUDA_CUDA_BUFFER_DBUFFER_SIZE_DEFAULT;
-    } else if (ParseSizeStringU32(value, &conf->cb_buffer_size) < 0) {
-        SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, "Invalid entry for %s."
-                   "cb-buffer-size - \"%s\"", node->name, value);
-        exit(EXIT_FAILURE);
-    }
-
-    if (node != NULL)
-        value = ConfNodeLookupChildValue(node, "gpu-transfer-size");
-    else
-        value = NULL;
-    if (value == NULL) {
-        /* default */
-        conf->gpu_transfer_size = UTIL_MPM_CUDA_GPU_TRANSFER_SIZE;
-    } else if (ParseSizeStringU32(value, &conf->gpu_transfer_size) < 0) {
-        SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, "Invalid entry for %s."
-                   "gpu-transfer-size - \"%s\"", node->name, value);
-        exit(EXIT_FAILURE);
-    }
-
-    if (node != NULL)
-        value = ConfNodeLookupChildValue(node, "batching-timeout");
-    else
-        value = NULL;
-    if (value == NULL) {
-        /* default */
-        conf->batching_timeout = UTIL_MPM_CUDA_BATCHING_TIMEOUT_DEFAULT;
-    } else if ((conf->batching_timeout = atoi(value)) < 0) {
-        SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, "Invalid entry for %s."
-                   "batching-timeout - \"%s\"", node->name, value);
-        exit(EXIT_FAILURE);
-    }
-
-    if (node != NULL)
-        value = ConfNodeLookupChildValue(node, "device-id");
-    else
-        value = NULL;
-    if (value == NULL) {
-        /* default */
-        conf->device_id = UTIL_MPM_CUDA_DEVICE_ID_DEFAULT;
-    } else if ((conf->device_id = atoi(value)) < 0) {
-        SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, "Invalid entry for %s."
-                   "device-id - \"%s\"", node->name, value);
-        exit(EXIT_FAILURE);
-    }
-
-    if (node != NULL)
-        value = ConfNodeLookupChildValue(node, "cuda-streams");
-    else
-        value = NULL;
-    if (value == NULL) {
-        /* default */
-        conf->cuda_streams = UTIL_MPM_CUDA_CUDA_STREAMS_DEFAULT;
-    } else if ((conf->cuda_streams = atoi(value)) < 0) {
-        SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, "Invalid entry for %s."
-                   "cuda-streams - \"%s\"", node->name, value);
-        exit(EXIT_FAILURE);
-    }
-
-    return conf;
-}
-
-void MpmCudaEnvironmentSetup()
-{
-    if (PatternMatchDefaultMatcher() != MPM_AC_CUDA)
-        return;
-
-    CudaHandlerAddCudaProfileFromConf("mpm", MpmCudaConfParse, MpmCudaConfFree);
-
-    MpmCudaConf *conf = CudaHandlerGetCudaProfile("mpm");
-    if (conf == NULL) {
-        SCLogError(SC_ERR_AC_CUDA_ERROR, "Error obtaining cuda mpm "
-                       "profile.");
-        exit(EXIT_FAILURE);
-    }
-
-    if (MpmCudaBufferSetup() < 0) {
-        SCLogError(SC_ERR_AC_CUDA_ERROR, "Error setting up env for ac "
-                   "cuda");
-        exit(EXIT_FAILURE);
-    }
-
-    return;
-}
-
-#endif
-
 void MpmInitThreadCtx(MpmThreadCtx *mpm_thread_ctx, uint16_t matcher)
 {
     mpm_table[matcher].InitThreadCtx(NULL, mpm_thread_ctx);
@@ -408,18 +267,10 @@ void MpmInitCtx (MpmCtx *mpm_ctx, uint16_t matcher)
 /* MPM matcher to use by default, i.e. when "mpm-algo" is set to "auto".
  * If Hyperscan is available, use it. Otherwise, use AC. */
 #ifdef BUILD_HYPERSCAN
-# define DEFAULT_MPM     MPM_HS
-# ifdef __tile__
-#  define DEFAULT_MPM_AC MPM_AC_TILE
-# else
-#  define DEFAULT_MPM_AC MPM_AC
-# endif
+# define DEFAULT_MPM    MPM_HS
+# define DEFAULT_MPM_AC MPM_AC
 #else
-# ifdef __tile__
-#  define DEFAULT_MPM    MPM_AC_TILE
-# else
-#  define DEFAULT_MPM    MPM_AC
-# endif
+# define DEFAULT_MPM    MPM_AC
 #endif
 
 void MpmTableSetup(void)
@@ -446,9 +297,6 @@ void MpmTableSetup(void)
         MpmHSRegister();
     #endif /* HAVE_HS_VALID_PLATFORM */
 #endif /* BUILD_HYPERSCAN */
-#ifdef __SC_CUDA_SUPPORT__
-    MpmACCudaRegister();
-#endif /* __SC_CUDA_SUPPORT__ */
 }
 
 int MpmAddPatternCS(struct MpmCtx_ *mpm_ctx, uint8_t *pat, uint16_t patlen,
@@ -501,9 +349,10 @@ static inline uint32_t MpmInitHashRaw(uint8_t *pat, uint16_t patlen)
  *
  * \retval hash A 32 bit unsigned hash.
  */
-static inline MpmPattern *MpmInitHashLookup(MpmCtx *ctx, uint8_t *pat,
-                                                  uint16_t patlen, char flags,
-                                                  uint32_t pid)
+static inline MpmPattern *MpmInitHashLookup(MpmCtx *ctx,
+        uint8_t *pat, uint16_t patlen,
+        uint16_t offset, uint16_t depth,
+        uint8_t flags, uint32_t pid)
 {
     uint32_t hash = MpmInitHashRaw(pat, patlen);
 
@@ -517,7 +366,7 @@ static inline MpmPattern *MpmInitHashLookup(MpmCtx *ctx, uint8_t *pat,
             if (t->id == pid)
                 return t;
         } else {
-            if (t->len == patlen &&
+            if (t->len == patlen && t->offset == offset && t->depth == depth &&
                     memcmp(pat, t->original_pat, patlen) == 0 &&
                     t->flags == flags)
             {
@@ -600,7 +449,7 @@ static inline int MpmInitHashAdd(MpmCtx *ctx, MpmPattern *p)
     uint32_t hash = MpmInitHash(p);
 
     if (ctx->init_hash == NULL) {
-        return 0;
+        return -1;
     }
 
     if (ctx->init_hash[hash] == NULL) {
@@ -652,7 +501,8 @@ int MpmAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
         pid = UINT_MAX;
 
     /* check if we have already inserted this pattern */
-    MpmPattern *p = MpmInitHashLookup(mpm_ctx, pat, patlen, flags, pid);
+    MpmPattern *p = MpmInitHashLookup(mpm_ctx, pat, patlen,
+            offset, depth, flags, pid);
     if (p == NULL) {
         SCLogDebug("Allocing new pattern");
 
@@ -661,6 +511,8 @@ int MpmAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
 
         p->len = patlen;
         p->flags = flags;
+        p->offset = offset;
+        p->depth = depth;
         if (flags & MPM_PATTERN_CTX_OWNS_ID)
             p->id = mpm_ctx->max_pat_id++;
         else
@@ -699,9 +551,21 @@ int MpmAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
         }
 
         /* put in the pattern hash */
-        MpmInitHashAdd(mpm_ctx, p);
+        if (MpmInitHashAdd(mpm_ctx, p) != 0)
+            goto error;
 
         mpm_ctx->pattern_cnt++;
+
+        if (!(mpm_ctx->flags & MPMCTX_FLAGS_NODEPTH)) {
+            if (depth) {
+                mpm_ctx->maxdepth = MAX(mpm_ctx->maxdepth, depth);
+                SCLogDebug("%p: depth %u max %u", mpm_ctx, depth, mpm_ctx->maxdepth);
+            } else {
+                mpm_ctx->flags |= MPMCTX_FLAGS_NODEPTH;
+                mpm_ctx->maxdepth = 0;
+                SCLogDebug("%p: alas, no depth for us", mpm_ctx);
+            }
+        }
 
         if (mpm_ctx->maxlen < patlen)
             mpm_ctx->maxlen = patlen;

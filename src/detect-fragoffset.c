@@ -44,13 +44,13 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectFragOffsetMatch(ThreadVars *, DetectEngineThreadCtx *,
+static int DetectFragOffsetMatch(DetectEngineThreadCtx *,
         Packet *, const Signature *, const SigMatchCtx *);
 static int DetectFragOffsetSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectFragOffsetRegisterTests(void);
 void DetectFragOffsetFree(void *);
 
-static int PrefilterSetupFragOffset(SigGroupHead *sgh);
+static int PrefilterSetupFragOffset(DetectEngineCtx *de_ctx, SigGroupHead *sgh);
 static _Bool PrefilterFragOffsetIsPrefilterable(const Signature *s);
 
 /**
@@ -103,7 +103,7 @@ static inline int FragOffsetMatch(const uint16_t poffset, const uint8_t mode,
  * \retval 1 match
  *
  */
-static int DetectFragOffsetMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+static int DetectFragOffsetMatch (DetectEngineThreadCtx *det_ctx,
         Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
     uint16_t frag = 0;
@@ -302,9 +302,9 @@ PrefilterPacketFragOffsetCompare(PrefilterPacketHeaderValue v, void *smctx)
     return FALSE;
 }
 
-static int PrefilterSetupFragOffset(SigGroupHead *sgh)
+static int PrefilterSetupFragOffset(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(sgh, DETECT_FRAGOFFSET,
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_FRAGOFFSET,
         PrefilterPacketFragOffsetSet,
         PrefilterPacketFragOffsetCompare,
         PrefilterPacketFragOffsetMatch);

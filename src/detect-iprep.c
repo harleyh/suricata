@@ -52,7 +52,7 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectIPRepMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+static int DetectIPRepMatch (DetectEngineThreadCtx *, Packet *,
         const Signature *, const SigMatchCtx *);
 static int DetectIPRepSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectIPRepFree (void *);
@@ -61,6 +61,8 @@ void IPRepRegisterTests(void);
 void DetectIPRepRegister (void)
 {
     sigmatch_table[DETECT_IPREP].name = "iprep";
+    sigmatch_table[DETECT_IPREP].desc = "match on the IP reputation information for a host";
+    sigmatch_table[DETECT_IPREP].url = DOC_URL DOC_VERSION "/rules/ip-reputation-rules.html#iprep";
     sigmatch_table[DETECT_IPREP].Match = DetectIPRepMatch;
     sigmatch_table[DETECT_IPREP].Setup = DetectIPRepSetup;
     sigmatch_table[DETECT_IPREP].Free  = DetectIPRepFree;
@@ -167,7 +169,7 @@ static inline int RepMatch(uint8_t op, uint8_t val1, uint8_t val2)
  *         1: match
  *        -1: error
  */
-static int DetectIPRepMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+static int DetectIPRepMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
         const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectIPRepData *rd = (const DetectIPRepData *)ctx;
@@ -341,6 +343,10 @@ int DetectIPRepSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
     name = NULL;
     pcre_free_substring(cmd_str);
     cmd_str = NULL;
+    pcre_free_substring(op_str);
+    op_str = NULL;
+    pcre_free_substring(value);
+    value = NULL;
 
     /* Okay so far so good, lets get this into a SigMatch
      * and put it in the Signature. */
@@ -360,6 +366,10 @@ error:
         pcre_free_substring(name);
     if (cmd_str != NULL)
         pcre_free_substring(cmd_str);
+    if (op_str != NULL)
+        pcre_free_substring(op_str);
+    if (value != NULL)
+        pcre_free_substring(value);
     if (cd != NULL)
         SCFree(cd);
     if (sm != NULL)

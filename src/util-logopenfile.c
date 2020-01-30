@@ -29,8 +29,8 @@
 #include "conf.h"            /* ConfNode, etc. */
 #include "output.h"          /* DEFAULT_LOG_* */
 #include "util-byte.h"
+#include "util-path.h"
 #include "util-logopenfile.h"
-#include "util-logopenfile-tile.h"
 
 #if defined(HAVE_SYS_UN_H) && defined(HAVE_SYS_SOCKET_H) && defined(HAVE_SYS_TYPES_H)
 #define BUILD_WITH_UNIXSOCKET
@@ -133,11 +133,9 @@ static int SCLogFileWriteSocket(const char *buffer, int buffer_len,
     int tries = 0;
     int ret = 0;
     bool reopen = false;
-#ifdef BUILD_WITH_UNIXSOCKET
     if (ctx->fp == NULL && ctx->is_sock) {
         SCLogUnixSocketReconnect(ctx);
     }
-#endif
 tryagain:
     ret = -1;
     reopen = 0;
@@ -243,41 +241,6 @@ static char *SCLogFilenameFromPattern(const char *pattern)
     return filename;
 }
 
-/** \brief recursively create missing log directories
- *  \param path path to log file
- *  \retval 0 on success
- *  \retval -1 on error
- */
-static int SCLogCreateDirectoryTree(const char *filepath)
-{
-    char pathbuf[PATH_MAX];
-    char *p;
-    size_t len = strlen(filepath);
-
-    if (len > PATH_MAX - 1) {
-        return -1;
-    }
-
-    strlcpy(pathbuf, filepath, len);
-
-    for (p = pathbuf + 1; *p; p++) {
-        if (*p == '/') {
-            /* Truncate, while creating directory */
-            *p = '\0';
-
-            if (mkdir(pathbuf, S_IRWXU | S_IRGRP | S_IXGRP) != 0) {
-                if (errno != EEXIST) {
-                    return -1;
-                }
-            }
-
-            *p = '/';
-        }
-    }
-
-    return 0;
-}
-
 static void SCLogFileClose(LogFileCtx *log_ctx)
 {
     if (log_ctx->fp)
@@ -301,7 +264,7 @@ SCLogOpenFileFp(const char *path, const char *append_setting, uint32_t mode)
         return NULL;
     }
 
-    int rc = SCLogCreateDirectoryTree(filename);
+    int rc = SCCreateDirectoryTree(filename, false);
     if (rc < 0) {
         SCFree(filename);
         return NULL;
@@ -320,7 +283,7 @@ SCLogOpenFileFp(const char *path, const char *append_setting, uint32_t mode)
         if (mode != 0) {
             int r = chmod(filename, mode);
             if (r < 0) {
-                SCLogWarning(SC_WARN_CHMOD, "Could not chmod %s to %u: %s",
+                SCLogWarning(SC_WARN_CHMOD, "Could not chmod %s to %o: %s",
                              filename, mode, strerror(errno));
             }
         }
@@ -328,24 +291,6 @@ SCLogOpenFileFp(const char *path, const char *append_setting, uint32_t mode)
 
     SCFree(filename);
     return ret;
-}
-
-/** \brief open the indicated file remotely over PCIe to a host
- *  \param path filesystem path to open
- *  \param append_setting open file with O_APPEND: "yes" or "no"
- *  \retval FILE* on success
- *  \retval NULL on error
- */
-static PcieFile *SCLogOpenPcieFp(LogFileCtx *log_ctx, const char *path, 
-                                 const char *append_setting)
-{
-#ifndef __tile__
-    SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, 
-               "PCIe logging only supported on Tile-Gx Architecture.");
-    return NULL;
-#else
-    return TileOpenPcieFp(log_ctx, path, append_setting);
-#endif
 }
 
 /** \brief open a generic output "log file", which may be a regular file or a socket
@@ -441,7 +386,6 @@ SCConfLogOpenGeneric(ConfNode *conf,
         append = DEFAULT_LOG_MODE_APPEND;
 
     /* JSON flags */
-#ifdef HAVE_LIBJANSSON
     log_ctx->json_flags = JSON_PRESERVE_ORDER|JSON_COMPACT|
                           JSON_ENSURE_ASCII|JSON_ESCAPE_SLASH;
 
@@ -467,7 +411,6 @@ SCConfLogOpenGeneric(ConfNode *conf,
         if (escape_slash != NULL && ConfValIsFalse(escape_slash))
             log_ctx->json_flags &= ~(JSON_ESCAPE_SLASH);
     }
-#endif /* HAVE_LIBJANSSON */
 
     // Now, what have we been asked to open?
     if (strcasecmp(filetype, "unix_stream") == 0) {
@@ -497,10 +440,6 @@ SCConfLogOpenGeneric(ConfNode *conf,
         if (rotate) {
             OutputRegisterFileRotationFlag(&log_ctx->rotation_flag);
         }
-    } else if (strcasecmp(filetype, "pcie") == 0) {
-        log_ctx->pcie_fp = SCLogOpenPcieFp(log_ctx, log_path, append);
-        if (log_ctx->pcie_fp == NULL)
-            return -1; // Error already logged by Open...Fp routine
 #ifdef HAVE_LIBHIREDIS
     } else if (strcasecmp(filetype, "redis") == 0) {
         ConfNode *redis_node = ConfNodeLookupChild(conf, "redis");
@@ -526,7 +465,7 @@ SCConfLogOpenGeneric(ConfNode *conf,
 
 #ifdef BUILD_WITH_UNIXSOCKET
     /* If a socket and running live, do non-blocking writes. */
-    if (log_ctx->is_sock && run_mode_offline == 0) {
+    if (log_ctx->is_sock && !IsRunModeOffline(RunmodeGetCurrent())) {
         SCLogInfo("Setting logging socket of non-blocking in live mode.");
         log_ctx->send_flags |= MSG_DONTWAIT;
     }
@@ -557,7 +496,9 @@ int SCConfLogReopen(LogFileCtx *log_ctx)
         return -1;
     }
 
-    fclose(log_ctx->fp);
+    if (log_ctx->fp != NULL) {
+        fclose(log_ctx->fp);
+    }
 
     /* Reopen the file. Append is forced in case the file was not
      * moved as part of a rotation process. */

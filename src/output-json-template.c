@@ -53,8 +53,6 @@
 #include "app-layer-template.h"
 #include "output-json-template.h"
 
-#ifdef HAVE_LIBJANSSON
-
 typedef struct LogTemplateFileCtx_ {
     LogFileCtx *file_ctx;
     uint32_t    flags;
@@ -71,16 +69,15 @@ static int JsonTemplateLogger(ThreadVars *tv, void *thread_data,
 {
     TemplateTransaction *templatetx = tx;
     LogTemplateLogThread *thread = thread_data;
-    json_t *js, *templatejs;
 
     SCLogNotice("Logging template transaction %"PRIu64".", templatetx->tx_id);
-    
-    js = CreateJSONHeader((Packet *)p, 0, "template");
+
+    json_t *js = CreateJSONHeader(p, LOG_DIR_PACKET, "template");
     if (unlikely(js == NULL)) {
         return TM_ECODE_FAILED;
     }
 
-    templatejs = json_object();
+    json_t *templatejs = json_object();
     if (unlikely(templatejs == NULL)) {
         goto error;
     }
@@ -122,21 +119,22 @@ static void OutputTemplateLogDeInitCtxSub(OutputCtx *output_ctx)
     SCFree(output_ctx);
 }
 
-static OutputCtx *OutputTemplateLogInitSub(ConfNode *conf,
+static OutputInitResult OutputTemplateLogInitSub(ConfNode *conf,
     OutputCtx *parent_ctx)
 {
-    AlertJsonThread *ajt = parent_ctx->data;
+    OutputInitResult result = { NULL, false };
+    OutputJsonCtx *ajt = parent_ctx->data;
 
     LogTemplateFileCtx *templatelog_ctx = SCCalloc(1, sizeof(*templatelog_ctx));
     if (unlikely(templatelog_ctx == NULL)) {
-        return NULL;
+        return result;
     }
     templatelog_ctx->file_ctx = ajt->file_ctx;
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(*output_ctx));
     if (unlikely(output_ctx == NULL)) {
         SCFree(templatelog_ctx);
-        return NULL;
+        return result;
     }
     output_ctx->data = templatelog_ctx;
     output_ctx->DeInit = OutputTemplateLogDeInitCtxSub;
@@ -145,10 +143,10 @@ static OutputCtx *OutputTemplateLogInitSub(ConfNode *conf,
 
     AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_TEMPLATE);
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
-
-#define OUTPUT_BUFFER_SIZE 65535
 
 static TmEcode JsonTemplateLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
@@ -163,7 +161,7 @@ static TmEcode JsonTemplateLogThreadInit(ThreadVars *t, const void *initdata, vo
         return TM_ECODE_FAILED;
     }
 
-    thread->buffer = MemBufferCreateNew(OUTPUT_BUFFER_SIZE);
+    thread->buffer = MemBufferCreateNew(JSON_OUTPUT_BUFFER_SIZE);
     if (unlikely(thread->buffer == NULL)) {
         SCFree(thread);
         return TM_ECODE_FAILED;
@@ -203,11 +201,3 @@ void JsonTemplateLogRegister(void)
 
     SCLogNotice("Template JSON logger registered.");
 }
-
-#else /* No JSON support. */
-
-void JsonTemplateLogRegister(void)
-{
-}
-
-#endif /* HAVE_LIBJANSSON */

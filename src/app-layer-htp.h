@@ -51,43 +51,25 @@
 #define HTP_CONFIG_DEFAULT_FIELD_LIMIT_SOFT             9000U
 #define HTP_CONFIG_DEFAULT_FIELD_LIMIT_HARD             18000U
 
+/* default libhtp lzma limit, taken from libhtp. */
+#define HTP_CONFIG_DEFAULT_LZMA_MEMLIMIT                1048576U
+#define HTP_CONFIG_DEFAULT_COMPRESSION_BOMB_LIMIT       1048576U
+
 #define HTP_CONFIG_DEFAULT_RANDOMIZE                    1
 #define HTP_CONFIG_DEFAULT_RANDOMIZE_RANGE              10
 
 /** a boundary should be smaller in size */
 #define HTP_BOUNDARY_MAX                            200U
 
-#define HTP_FLAG_STATE_OPEN         0x0001    /**< Flag to indicate that HTTP
-                                             connection is open */
+// 0x0001 not used
 #define HTP_FLAG_STATE_CLOSED_TS    0x0002    /**< Flag to indicate that HTTP
                                              connection is closed */
 #define HTP_FLAG_STATE_CLOSED_TC    0x0004    /**< Flag to indicate that HTTP
                                              connection is closed */
-#define HTP_FLAG_STATE_DATA         0x0008    /**< Flag to indicate that HTTP
-                                             connection needs more data */
-#define HTP_FLAG_STATE_ERROR        0x0010    /**< Flag to indicate that an error
-                                             has been occured on HTTP
-                                             connection */
-#define HTP_FLAG_NEW_BODY_SET       0x0020    /**< Flag to indicate that HTTP
-                                             has parsed a new body (for
-                                             pcre) */
 #define HTP_FLAG_STORE_FILES_TS     0x0040
 #define HTP_FLAG_STORE_FILES_TC     0x0080
 #define HTP_FLAG_STORE_FILES_TX_TS  0x0100
 #define HTP_FLAG_STORE_FILES_TX_TC  0x0200
-/** flag the state that a new file has been set in this tx */
-#define HTP_FLAG_NEW_FILE_TX_TS     0x0400
-/** flag the state that a new file has been set in this tx */
-#define HTP_FLAG_NEW_FILE_TX_TC     0x0800
-
-enum {
-    HTP_BODY_NONE = 0,                  /**< Flag to indicate the current
-                                             operation */
-    HTP_BODY_REQUEST,                   /**< Flag to indicate that the
-                                             current operation is a request */
-    HTP_BODY_RESPONSE                   /**< Flag to indicate that the current
-                                          * operation is a response */
-};
 
 enum {
     HTP_BODY_REQUEST_NONE = 0,
@@ -108,6 +90,8 @@ enum {
     HTTP_DECODER_EVENT_INVALID_TRANSFER_ENCODING_VALUE_IN_RESPONSE,
     HTTP_DECODER_EVENT_INVALID_CONTENT_LENGTH_FIELD_IN_REQUEST,
     HTTP_DECODER_EVENT_INVALID_CONTENT_LENGTH_FIELD_IN_RESPONSE,
+    HTTP_DECODER_EVENT_DUPLICATE_CONTENT_LENGTH_FIELD_IN_REQUEST,
+    HTTP_DECODER_EVENT_DUPLICATE_CONTENT_LENGTH_FIELD_IN_RESPONSE,
     HTTP_DECODER_EVENT_100_CONTINUE_ALREADY_SEEN,
     HTTP_DECODER_EVENT_UNABLE_TO_MATCH_RESPONSE_TO_REQUEST,
     HTTP_DECODER_EVENT_INVALID_SERVER_PORT_IN_REQUEST,
@@ -126,12 +110,36 @@ enum {
     HTTP_DECODER_EVENT_METHOD_DELIM_NON_COMPLIANT,
     HTTP_DECODER_EVENT_URI_DELIM_NON_COMPLIANT,
     HTTP_DECODER_EVENT_REQUEST_LINE_LEADING_WHITESPACE,
+    HTTP_DECODER_EVENT_TOO_MANY_ENCODING_LAYERS,
+    HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER,
+    HTTP_DECODER_EVENT_AUTH_UNRECOGNIZED,
+    HTTP_DECODER_EVENT_REQUEST_HEADER_REPETITION,
+    HTTP_DECODER_EVENT_RESPONSE_HEADER_REPETITION,
+    HTTP_DECODER_EVENT_RESPONSE_MULTIPART_BYTERANGES,
+    HTTP_DECODER_EVENT_RESPONSE_ABNORMAL_TRANSFER_ENCODING,
+    HTTP_DECODER_EVENT_RESPONSE_CHUNKED_OLD_PROTO,
+    HTTP_DECODER_EVENT_RESPONSE_INVALID_PROTOCOL,
+    HTTP_DECODER_EVENT_RESPONSE_INVALID_STATUS,
+    HTTP_DECODER_EVENT_REQUEST_LINE_INCOMPLETE,
+    HTTP_DECODER_EVENT_DOUBLE_ENCODED_URI,
+    HTTP_DECODER_EVENT_REQUEST_LINE_INVALID,
+    HTTP_DECODER_EVENT_REQUEST_BODY_UNEXPECTED,
+
+    HTTP_DECODER_EVENT_LZMA_MEMLIMIT_REACHED,
+    HTTP_DECODER_EVENT_COMPRESSION_BOMB,
 
     /* suricata errors/warnings */
     HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR,
     HTTP_DECODER_EVENT_MULTIPART_NO_FILEDATA,
     HTTP_DECODER_EVENT_MULTIPART_INVALID_HEADER,
 };
+
+typedef enum HtpSwfCompressType_ {
+    HTTP_SWF_COMPRESSION_NONE = 0,
+    HTTP_SWF_COMPRESSION_ZLIB,
+    HTTP_SWF_COMPRESSION_LZMA,
+    HTTP_SWF_COMPRESSION_BOTH,
+} HtpSwfCompressType;
 
 typedef struct HTPCfgDir_ {
     uint32_t body_limit;
@@ -152,6 +160,11 @@ typedef struct HTPCfgRec_ {
     int                 randomize_range;
     int                 http_body_inline;
 
+    int                 swf_decompression_enabled;
+    HtpSwfCompressType  swf_compression_type;
+    uint32_t            swf_decompress_depth;
+    uint32_t            swf_compress_depth;
+
     HTPCfgDir request;
     HTPCfgDir response;
 } HTPCfgRec;
@@ -159,8 +172,8 @@ typedef struct HTPCfgRec_ {
 /** Struct used to hold chunks of a body on a request */
 struct HtpBodyChunk_ {
     struct HtpBodyChunk_ *next; /**< Pointer to the next chunk */
-    StreamingBufferSegment sbseg;
     int logged;
+    StreamingBufferSegment sbseg;
 } __attribute__((__packed__));
 typedef struct HtpBodyChunk_ HtpBodyChunk;
 
@@ -179,17 +192,19 @@ typedef struct HtpBody_ {
     uint64_t body_inspected;
 } HtpBody;
 
-#define HTP_CONTENTTYPE_SET     0x01    /**< We have the content type */
-#define HTP_BOUNDARY_SET        0x02    /**< We have a boundary string */
-#define HTP_BOUNDARY_OPEN       0x04    /**< We have a boundary string */
-#define HTP_FILENAME_SET        0x08   /**< filename is registered in the flow */
-#define HTP_DONTSTORE           0x10    /**< not storing this file */
+#define HTP_CONTENTTYPE_SET     BIT_U8(0)    /**< We have the content type */
+#define HTP_BOUNDARY_SET        BIT_U8(1)    /**< We have a boundary string */
+#define HTP_BOUNDARY_OPEN       BIT_U8(2)    /**< We have a boundary string */
+#define HTP_FILENAME_SET        BIT_U8(3)    /**< filename is registered in the flow */
+#define HTP_DONTSTORE           BIT_U8(4)    /**< not storing this file */
+#define HTP_STREAM_DEPTH_SET    BIT_U8(5)    /**< stream-depth is set */
 
 /** Now the Body Chunks will be stored per transaction, at
   * the tx user data */
 typedef struct HtpTxUserData_ {
-    /** flags to track which mpm has run */
-    uint64_t mpm_ids;
+    /** detection engine flags */
+    uint64_t detect_flags_ts;
+    uint64_t detect_flags_tc;
 
     /* Body of the request (if any) */
     uint8_t request_body_init;
@@ -213,7 +228,7 @@ typedef struct HtpTxUserData_ {
 
     AppLayerDecoderEvents *decoder_events;          /**< per tx events */
 
-    /** Holds the boundary identificator string if any (used on
+    /** Holds the boundary identification string if any (used on
      *  multipart/form-data only)
      */
     uint8_t *boundary;
@@ -222,10 +237,7 @@ typedef struct HtpTxUserData_ {
     uint8_t tsflags;
     uint8_t tcflags;
 
-    int16_t operation;
-
     uint8_t request_body_type;
-    uint8_t response_body_type;
 
     DetectEngineState *de_state;
 } HtpTxUserData;
@@ -235,7 +247,7 @@ typedef struct HtpState_ {
     htp_connp_t *connp;
     /* Connection structure for each connection */
     htp_conn_t *conn;
-    Flow *f;                /**< Needed to retrieve the original flow when usin HTPLib callbacks */
+    Flow *f;                /**< Needed to retrieve the original flow when using HTPLib callbacks */
     uint64_t transaction_cnt;
     uint64_t store_tx_id;
     FileContainer *files_ts;
@@ -244,7 +256,9 @@ typedef struct HtpState_ {
     uint16_t flags;
     uint16_t events;
     uint16_t htp_messages_offset; /**< offset into conn->messages list */
-    uint64_t tx_with_detect_state_cnt;
+    uint32_t file_track_id;             /**< used to assign file track ids to files */
+    uint64_t last_request_data_stamp;
+    uint64_t last_response_data_stamp;
 } HtpState;
 
 /** part of the engine needs the request body (e.g. http_client_body keyword) */

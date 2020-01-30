@@ -49,10 +49,9 @@
 
 #include "stream-tcp-private.h"
 
-#ifdef HAVE_LIBJANSSON
-
 typedef struct LogJsonFileCtx_ {
     LogFileCtx *file_ctx;
+    OutputJsonCommonSettings cfg;
 } LogJsonFileCtx;
 
 typedef struct JsonNetFlowLogThread_ {
@@ -63,10 +62,10 @@ typedef struct JsonNetFlowLogThread_ {
 } JsonNetFlowLogThread;
 
 
-static json_t *CreateJSONHeaderFromFlow(Flow *f, const char *event_type, int dir)
+static json_t *CreateJSONHeaderFromFlow(const Flow *f, const char *event_type, int dir)
 {
     char timebuf[64];
-    char srcip[46], dstip[46];
+    char srcip[46] = {0}, dstip[46] = {0};
     Port sp, dp;
 
     json_t *js = json_object();
@@ -79,8 +78,9 @@ static json_t *CreateJSONHeaderFromFlow(Flow *f, const char *event_type, int dir
 
     CreateIsoTimeString(&tv, timebuf, sizeof(timebuf));
 
-    srcip[0] = '\0';
-    dstip[0] = '\0';
+    /* reverse header direction if the flow started out wrong */
+    dir ^= ((f->flags & FLOW_DIR_REVERSED) != 0);
+
     if (FLOW_IS_IPV4(f)) {
         if (dir == 0) {
             PrintInet(AF_INET, (const void *)&(f->src.addr_data32[0]), srcip, sizeof(srcip));
@@ -124,34 +124,26 @@ static json_t *CreateJSONHeaderFromFlow(Flow *f, const char *event_type, int dir
     if (sensor_id >= 0)
         json_object_set_new(js, "sensor_id", json_integer(sensor_id));
 #endif
+
+    /* input interface */
+    if (f->livedev) {
+        json_object_set_new(js, "in_iface", json_string(f->livedev->dev));
+    }
+
     if (event_type) {
         json_object_set_new(js, "event_type", json_string(event_type));
     }
-#if 0
+
     /* vlan */
-    if (f->vlan_id[0] > 0) {
-        json_t *js_vlan;
-        switch (f->vlan_idx) {
-            case 1:
-                json_object_set_new(js, "vlan",
-                                    json_integer(f->vlan_id[0]));
-                break;
-            case 2:
-                js_vlan = json_array();
-                if (unlikely(js != NULL)) {
-                    json_array_append_new(js_vlan,
-                                    json_integer(VLAN_GET_ID1(p)));
-                    json_array_append_new(js_vlan,
-                                    json_integer(VLAN_GET_ID2(p)));
-                    json_object_set_new(js, "vlan", js_vlan);
-                }
-                break;
-            default:
-                /* shouldn't get here */
-                break;
+    if (f->vlan_idx > 0) {
+        json_t *js_vlan = json_array();
+        json_array_append_new(js_vlan, json_integer(f->vlan_id[0]));
+        if (f->vlan_idx > 1) {
+            json_array_append_new(js_vlan, json_integer(f->vlan_id[1]));
         }
+        json_object_set_new(js, "vlan", js_vlan);
     }
-#endif
+
     /* tuple */
     json_object_set_new(js, "src_ip", json_string(srcip));
     switch(f->proto) {
@@ -176,12 +168,18 @@ static json_t *CreateJSONHeaderFromFlow(Flow *f, const char *event_type, int dir
     json_object_set_new(js, "proto", json_string(proto));
     switch (f->proto) {
         case IPPROTO_ICMP:
-        case IPPROTO_ICMPV6:
-            json_object_set_new(js, "icmp_type",
-                    json_integer(f->type));
-            json_object_set_new(js, "icmp_code",
-                    json_integer(f->code));
+        case IPPROTO_ICMPV6: {
+            uint8_t type = f->icmp_s.type;
+            uint8_t code = f->icmp_s.code;
+            if (dir == 1) {
+                type = f->icmp_d.type;
+                code = f->icmp_d.code;
+
+            }
+            json_object_set_new(js, "icmp_type", json_integer(type));
+            json_object_set_new(js, "icmp_code", json_integer(code));
             break;
+        }
     }
     return js;
 }
@@ -213,6 +211,9 @@ static void JsonNetFlowLogJSONToServer(JsonNetFlowLogThread *aft, json_t *js, Fl
     int32_t age = f->lastts.tv_sec - f->startts.tv_sec;
     json_object_set_new(hjs, "age",
             json_integer(age));
+
+    json_object_set_new(hjs, "min_ttl", json_integer(f->min_ttl_toserver));
+    json_object_set_new(hjs, "max_ttl", json_integer(f->max_ttl_toserver));
 
     json_object_set_new(js, "netflow", hjs);
 
@@ -263,6 +264,12 @@ static void JsonNetFlowLogJSONToClient(JsonNetFlowLogThread *aft, json_t *js, Fl
     json_object_set_new(hjs, "age",
             json_integer(age));
 
+    /* To client is zero if we did not see any packet */
+    if (f->tosrcpktcnt) {
+        json_object_set_new(hjs, "min_ttl", json_integer(f->min_ttl_toclient));
+        json_object_set_new(hjs, "max_ttl", json_integer(f->max_ttl_toclient));
+    }
+
     json_object_set_new(js, "netflow", hjs);
 
     /* TCP */
@@ -289,29 +296,34 @@ static int JsonNetFlowLogger(ThreadVars *tv, void *thread_data, Flow *f)
 {
     SCEnter();
     JsonNetFlowLogThread *jhl = (JsonNetFlowLogThread *)thread_data;
+    LogJsonFileCtx *netflow_ctx = jhl->flowlog_ctx;
 
     /* reset */
     MemBufferReset(jhl->buffer);
-    json_t *js = CreateJSONHeaderFromFlow(f, "netflow", 0); //TODO const
+    json_t *js = CreateJSONHeaderFromFlow(f, "netflow", 0);
     if (unlikely(js == NULL))
         return TM_ECODE_OK;
     JsonNetFlowLogJSONToServer(jhl, js, f);
+    JsonAddCommonOptions(&netflow_ctx->cfg, NULL, f, js);
     OutputJSONBuffer(js, jhl->flowlog_ctx->file_ctx, &jhl->buffer);
     json_object_del(js, "netflow");
     json_object_clear(js);
     json_decref(js);
 
-    /* reset */
-    MemBufferReset(jhl->buffer);
-    js = CreateJSONHeaderFromFlow(f, "netflow", 1); //TODO const
-    if (unlikely(js == NULL))
-        return TM_ECODE_OK;
-    JsonNetFlowLogJSONToClient(jhl, js, f);
-    OutputJSONBuffer(js, jhl->flowlog_ctx->file_ctx, &jhl->buffer);
-    json_object_del(js, "netflow");
-    json_object_clear(js);
-    json_decref(js);
-
+    /* only log a response record if we actually have seen response packets */
+    if (f->tosrcpktcnt) {
+        /* reset */
+        MemBufferReset(jhl->buffer);
+        js = CreateJSONHeaderFromFlow(f, "netflow", 1);
+        if (unlikely(js == NULL))
+            return TM_ECODE_OK;
+        JsonNetFlowLogJSONToClient(jhl, js, f);
+        JsonAddCommonOptions(&netflow_ctx->cfg, NULL, f, js);
+        OutputJSONBuffer(js, jhl->flowlog_ctx->file_ctx, &jhl->buffer);
+        json_object_del(js, "netflow");
+        json_object_clear(js);
+        json_decref(js);
+    }
     SCReturnInt(TM_ECODE_OK);
 }
 
@@ -325,38 +337,40 @@ static void OutputNetFlowLogDeinit(OutputCtx *output_ctx)
 }
 
 #define DEFAULT_LOG_FILENAME "netflow.json"
-static OutputCtx *OutputNetFlowLogInit(ConfNode *conf)
+static OutputInitResult OutputNetFlowLogInit(ConfNode *conf)
 {
-    SCLogInfo("hi");
+    OutputInitResult result = { NULL, false };
     LogFileCtx *file_ctx = LogFileNewCtx();
     if(file_ctx == NULL) {
         SCLogError(SC_ERR_NETFLOW_LOG_GENERIC, "couldn't create new file_ctx");
-        return NULL;
+        return result;
     }
 
     if (SCConfLogOpenGeneric(conf, file_ctx, DEFAULT_LOG_FILENAME, 1) < 0) {
         LogFileFreeCtx(file_ctx);
-        return NULL;
+        return result;
     }
 
     LogJsonFileCtx *flow_ctx = SCMalloc(sizeof(LogJsonFileCtx));
     if (unlikely(flow_ctx == NULL)) {
         LogFileFreeCtx(file_ctx);
-        return NULL;
+        return result;
     }
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
         LogFileFreeCtx(file_ctx);
         SCFree(flow_ctx);
-        return NULL;
+        return result;
     }
 
     flow_ctx->file_ctx = file_ctx;
     output_ctx->data = flow_ctx;
     output_ctx->DeInit = OutputNetFlowLogDeinit;
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
 static void OutputNetFlowLogDeinitSub(OutputCtx *output_ctx)
@@ -366,29 +380,32 @@ static void OutputNetFlowLogDeinitSub(OutputCtx *output_ctx)
     SCFree(output_ctx);
 }
 
-static OutputCtx *OutputNetFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputInitResult OutputNetFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
+    OutputInitResult result = { NULL, false };
     OutputJsonCtx *ojc = parent_ctx->data;
 
     LogJsonFileCtx *flow_ctx = SCMalloc(sizeof(LogJsonFileCtx));
     if (unlikely(flow_ctx == NULL))
-        return NULL;
+        return result;
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
         SCFree(flow_ctx);
-        return NULL;
+        return result;
     }
 
     flow_ctx->file_ctx = ojc->file_ctx;
+    flow_ctx->cfg = ojc->cfg;
 
     output_ctx->data = flow_ctx;
     output_ctx->DeInit = OutputNetFlowLogDeinitSub;
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
-#define OUTPUT_BUFFER_SIZE 65535
 static TmEcode JsonNetFlowLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     JsonNetFlowLogThread *aft = SCMalloc(sizeof(JsonNetFlowLogThread));
@@ -406,7 +423,7 @@ static TmEcode JsonNetFlowLogThreadInit(ThreadVars *t, const void *initdata, voi
     /* Use the Ouptut Context (file pointer and mutex) */
     aft->flowlog_ctx = ((OutputCtx *)initdata)->data; //TODO
 
-    aft->buffer = MemBufferCreateNew(OUTPUT_BUFFER_SIZE);
+    aft->buffer = MemBufferCreateNew(JSON_OUTPUT_BUFFER_SIZE);
     if (aft->buffer == NULL) {
         SCFree(aft);
         return TM_ECODE_FAILED;
@@ -443,11 +460,3 @@ void JsonNetFlowLogRegister(void)
         "eve-log.netflow", OutputNetFlowLogInitSub, JsonNetFlowLogger,
         JsonNetFlowLogThreadInit, JsonNetFlowLogThreadDeinit, NULL);
 }
-
-#else
-
-void JsonNetFlowLogRegister (void)
-{
-}
-
-#endif

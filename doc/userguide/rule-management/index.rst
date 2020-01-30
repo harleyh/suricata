@@ -3,6 +3,6 @@ Rule Management
 
 .. toctree::
 
-  oinkmaster
+  suricata-update
   adding-your-own-rules
   rule-reload

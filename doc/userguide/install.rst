@@ -1,3 +1,5 @@
+.. _installation:
+
 Installation
 ============
 
@@ -16,8 +18,8 @@ Installing from the source distribution files gives the most control over the Su
 
 Basic steps::
 
-    tar xzvf suricata-4.0.0.tar.gz
-    cd suricata-4.0.0
+    tar xzvf suricata-5.0.0.tar.gz
+    cd suricata-5.0.0
     ./configure
     make
     make install
@@ -51,13 +53,10 @@ Common configure options
 
     Enables Lua support for detection and output.
 
-.. option:: --enable-geopip
+.. option:: --enable-geoip
 
     Enables GeoIP support for detection.
 
-.. option:: --enable-rust
-
-    Enables experimental Rust support
 
 Dependencies
 ^^^^^^^^^^^^
@@ -74,9 +73,13 @@ For full features, also add:
 
   libjansson, libnss, libgeoip, liblua5.1, libhiredis, libevent
 
-Rust support (experimental):
+Rust support:
 
   rustc, cargo
+
+  Not every distro provides Rust packages yet. Rust can also be installed
+  directly from the Rust project itself:
+  https://www.rust-lang.org/en-US/install.html
 
 Ubuntu/Debian
 """""""""""""
@@ -92,7 +95,8 @@ Recommended::
     apt-get install libpcre3 libpcre3-dbg libpcre3-dev build-essential libpcap-dev   \
                     libnet1-dev libyaml-0-2 libyaml-dev pkg-config zlib1g zlib1g-dev \
                     libcap-ng-dev libcap-ng0 make libmagic-dev libjansson-dev        \
-                    libnss3-dev libgeoip-dev liblua5.1-dev libhiredis-dev libevent-dev
+                    libnss3-dev libgeoip-dev liblua5.1-dev libhiredis-dev libevent-dev \
+                    python-yaml rustc cargo
 
 Extra for iptables/nftables IPS integration::
 
@@ -100,7 +104,7 @@ Extra for iptables/nftables IPS integration::
                     libnetfilter-log-dev libnetfilter-log1      \
                     libnfnetlink-dev libnfnetlink0
 
-For Rust support (Ubuntu only)::
+For Rust support::
 
     apt-get install rustc cargo
 

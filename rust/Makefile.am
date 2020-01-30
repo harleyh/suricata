@@ -1,18 +1,10 @@
-EXTRA_DIST = 	Cargo.toml \
-		src \
+EXTRA_DIST =	src \
 		.cargo/config.in \
-		gen-c-headers.py
-
-if HAVE_RUST
-
-EXTRA_DIST +=	Cargo.lock
+		cbindgen.toml \
+		gen/rust-bindings.h
 
 if HAVE_CARGO_VENDOR
 EXTRA_DIST +=	vendor
-endif
-
-if HAVE_RUST_VENDOR
-FROZEN = --frozen
 endif
 
 if !DEBUG
@@ -20,58 +12,65 @@ RELEASE = --release
 endif
 
 if HAVE_LUA
-RUST_FEATURES +=	lua
+RUST_FEATURES +=	lua $(LUA_INT8)
 endif
 
-if HAVE_RUST_EXTERNAL
-RUST_FEATURES +=	experimental
+if DEBUG
+RUST_FEATURES +=	debug
+endif
+
+if RUST_CROSS_COMPILE 
+RUST_TARGET = --target $(host_triplet)
 endif
 
 all-local:
-if HAVE_PYTHON
-	cd $(top_srcdir)/rust && \
-		$(HAVE_PYTHON) ./gen-c-headers.py && \
-		CARGO_TARGET_DIR=$(abs_builddir)/target \
-		CARGO_HOME=$(CARGO_HOME) $(CARGO) build $(RELEASE) $(FROZEN) \
-			--features "$(RUST_FEATURES)"
+if HAVE_CBINDGEN
+	cbindgen --config $(abs_top_srcdir)/rust/cbindgen.toml \
+		--quiet --output $(abs_top_builddir)/rust/gen/rust-bindings.h
+endif
+if HAVE_CYGPATH
+	@rustup_home@ \
+		CARGO_HOME="$(CARGO_HOME)" \
+		CARGO_TARGET_DIR="$(e_rustdir)/target" \
+		$(CARGO) build $(RELEASE) \
+			--features "$(RUST_FEATURES)" $(RUST_TARGET)
 else
-	cd $(top_srcdir)/rust && CARGO_TARGET_DIR=$(abs_builddir)/target \
-		CARGO_HOME=$(CARGO_HOME) $(CARGO) build $(RELEASE) $(FROZEN) \
-			--features "$(RUST_FEATURES)"
+	@rustup_home@ \
+		CARGO_HOME="$(CARGO_HOME)" \
+		CARGO_TARGET_DIR="$(abs_top_builddir)/rust/target" \
+		$(CARGO) build $(RELEASE) \
+			--features "$(RUST_FEATURES)" $(RUST_TARGET)
 endif
 
 clean-local:
-	cd $(top_srcdir)/rust && CARGO_TARGET_DIR=$(abs_builddir)/target \
-		CARGO_HOME=$(CARGO_HOME) $(CARGO) clean
+	rm -rf target
+if HAVE_CBINDGEN
+	rm -rf gen
+endif
 
 distclean-local:
-	rm -rf vendor gen Cargo.lock
+	rm -f Cargo.lock
+
+maintainerclean-local:
+	rm -rf vendor gen
 
 check:
-	cd $(top_srcdir)/rust && CARGO_TARGET_DIR=$(abs_builddir)/target \
-		CARGO_HOME=$(CARGO_HOME) $(CARGO) test
-
-Cargo.lock: Cargo.toml
-	CARGO_HOME=$(CARGO_HOME) $(CARGO) generate-lockfile
+	CARGO_HOME="$(CARGO_HOME)" @rustup_home@ \
+		CARGO_TARGET_DIR="$(abs_top_builddir)/rust/target" \
+		$(CARGO) test $(RELEASE) --features "$(RUST_FEATURES)"
 
 if HAVE_CARGO_VENDOR
 vendor:
-	CARGO_HOME=$(CARGO_HOME) $(CARGO) vendor > /dev/null
+	CARGO_HOME="$(CARGO_HOME)" @rustup_home@ $(CARGO) vendor > /dev/null
 else
 vendor:
 endif
 
-else # HAVE_RUST
-
-all-local clean-local check vendor:
-
-endif # HAVE_RUST
-
 # Can only include the headers if we have Python to generate them.
-if HAVE_PYTHON
-EXTRA_DIST +=	gen/c-headers
-gen/c-headers:
-	cd $(top_srcdir)/rust && $(HAVE_PYTHON) ./gen-c-headers.py
+if HAVE_CBINDGEN
+gen/rust-bindings.h:
+	cbindgen --config $(abs_top_srcdir)/rust/cbindgen.toml \
+		--quiet --output $(abs_top_builddir)/rust/gen/rust-bindings.h
 else
-gen/c-headers:
+gen/rust-bindings.h:
 endif

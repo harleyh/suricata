@@ -37,6 +37,8 @@
 #include "app-layer-parser.h"
 #include "util-validate.h"
 
+extern int g_detect_disabled;
+
 /** \brief switch to force filestore on all files
  *         regardless of the rules.
  */
@@ -79,6 +81,9 @@ static uint32_t g_file_store_reassembly_depth = 0;
 
 /* prototypes */
 static void FileFree(File *);
+#ifdef HAVE_NSS
+static void FileEndSha256(File *ff);
+#endif
 
 void FileForceFilestoreEnable(void)
 {
@@ -296,9 +301,32 @@ uint64_t FileTrackedSize(const File *file)
     return 0;
 }
 
+/** \brief test if file is ready to be pruned
+ *
+ *  If a file is in the 'CLOSED' state, it means it has been processed
+ *  completely by the pipeline in the correct direction. So we can
+ *  prune it then.
+ *
+ *  For other states, as well as for files we may not need to track
+ *  until the close state, more specific checks are done.
+ *
+ *  Also does house keeping within the file: move streaming buffer
+ *  forward if possible.
+ *
+ *  \retval 1 prune (free) this file
+ *  \retval 0 file not ready to be freed
+ */
 static int FilePruneFile(File *file)
 {
     SCEnter();
+
+    /* file is done when state is closed+, logging/storing is done (if any) */
+    SCLogDebug("file->state %d. Is >= FILE_STATE_CLOSED: %s",
+            file->state, (file->state >= FILE_STATE_CLOSED) ? "yes" : "no");
+    if (file->state >= FILE_STATE_CLOSED) {
+        SCReturnInt(1);
+    }
+
 #ifdef HAVE_MAGIC
     if (!(file->flags & FILE_NOMAGIC)) {
         /* need magic but haven't set it yet, bail out */
@@ -310,33 +338,39 @@ static int FilePruneFile(File *file)
         SCLogDebug("file->flags & FILE_NOMAGIC == true");
     }
 #endif
-    uint64_t left_edge = file->content_stored;
-    if (file->flags & FILE_NOSTORE) {
-        left_edge = FileDataSize(file);
+    uint64_t left_edge = FileDataSize(file);
+    if (file->flags & FILE_STORE) {
+        left_edge = MIN(left_edge,file->content_stored);
     }
     if (file->flags & FILE_USE_DETECT) {
         left_edge = MIN(left_edge, file->content_inspected);
+
+        /* if file has inspect window and min size set, we
+         * do some house keeping here */
+        if (file->inspect_window != 0 && file->inspect_min_size != 0) {
+            uint32_t window = file->inspect_window;
+            if (file->sb->stream_offset == 0)
+                window = MAX(window, file->inspect_min_size);
+
+            uint64_t file_size = FileDataSize(file);
+            uint64_t data_size = file_size - file->sb->stream_offset;
+
+            SCLogDebug("window %"PRIu32", file_size %"PRIu64", data_size %"PRIu64,
+                    window, file_size, data_size);
+
+            if (data_size > (window * 3)) {
+                left_edge = file_size - window;
+                SCLogDebug("file->content_inspected now %"PRIu64, left_edge);
+                file->content_inspected = left_edge;
+            }
+        }
     }
 
     if (left_edge) {
         StreamingBufferSlideToOffset(file->sb, left_edge);
     }
 
-    if (left_edge != FileDataSize(file)) {
-        SCReturnInt(0);
-    }
-
-    SCLogDebug("file->state %d. Is >= FILE_STATE_CLOSED: %s", file->state, (file->state >= FILE_STATE_CLOSED) ? "yes" : "no");
-
-    /* file is done when state is closed+, logging/storing is done (if any) */
-    if (file->state >= FILE_STATE_CLOSED &&
-        (!RunModeOutputFileEnabled() || (file->flags & FILE_LOGGED)) &&
-        (!RunModeOutputFiledataEnabled() || (file->flags & FILE_STORED)))
-    {
-        SCReturnInt(1);
-    } else {
-        SCReturnInt(0);
-    }
+    SCReturnInt(0);
 }
 
 void FilePrune(FileContainer *ffc)
@@ -451,6 +485,13 @@ static File *FileAlloc(const uint8_t *name, uint16_t name_len)
     new->name_len = name_len;
     memcpy(new->name, name, name_len);
 
+    new->sid_cnt = 0;
+    new->sid_max = 8;
+    /* SCMalloc() is allowed to fail here because sid well be checked later on */
+    new->sid = SCMalloc(sizeof(uint32_t) * new->sid_max);
+    if (new->sid == NULL)
+        new->sid_max = 0;
+
     return new;
 }
 
@@ -461,6 +502,8 @@ static void FileFree(File *ff)
 
     if (ff->name != NULL)
         SCFree(ff->name);
+    if (ff->sid != NULL)
+        SCFree(ff->sid);
 #ifdef HAVE_MAGIC
     /* magic returned by libmagic is strdup'd by MagicLookup. */
     if (ff->magic != NULL)
@@ -597,7 +640,8 @@ static int FileAppendDataDo(File *ff, const uint8_t *data, uint32_t data_len)
         SCReturnInt(-1);
     }
 
-    if (FileStoreNoStoreCheck(ff) == 1) {
+    if ((ff->flags & FILE_USE_DETECT) == 0 &&
+            FileStoreNoStoreCheck(ff) == 1) {
 #ifdef HAVE_NSS
         int hash_done = 0;
         /* no storage but forced hashing */
@@ -627,9 +671,10 @@ static int FileAppendDataDo(File *ff, const uint8_t *data, uint32_t data_len)
 
     SCLogDebug("appending %"PRIu32" bytes", data_len);
 
-    if (AppendData(ff, data, data_len) != 0) {
+    int r = AppendData(ff, data, data_len);
+    if (r != 0) {
         ff->state = FILE_STATE_ERROR;
-        SCReturnInt(-1);
+        SCReturnInt(r);
     }
 
     SCReturnInt(0);
@@ -725,6 +770,34 @@ int FileAppendGAPById(FileContainer *ffc, uint32_t track_id,
     SCReturnInt(-1);
 }
 
+void FileSetInspectSizes(File *file, const uint32_t win, const uint32_t min)
+{
+    file->inspect_window = win;
+    file->inspect_min_size = min;
+}
+
+/**
+ *  \brief Sets the offset range for a file.
+ *
+ *  \param ffc the container
+ *  \param start start offset
+ *  \param end end offset
+ *
+ *  \retval  0 ok
+ *  \retval -1 error
+ */
+int FileSetRange(FileContainer *ffc, uint64_t start, uint64_t end)
+{
+    SCEnter();
+
+    if (ffc == NULL || ffc->tail == NULL) {
+        SCReturnInt(-1);
+    }
+    ffc->tail->start = start;
+    ffc->tail->end = end;
+    SCReturnInt(0);
+}
+
 /**
  *  \brief Open a new File
  *
@@ -740,7 +813,7 @@ int FileAppendGAPById(FileContainer *ffc, uint32_t track_id,
  *
  *  \note filename is not a string, so it's not nul terminated.
  */
-File *FileOpenFile(FileContainer *ffc, const StreamingBufferConfig *sbcfg,
+static File *FileOpenFile(FileContainer *ffc, const StreamingBufferConfig *sbcfg,
         const uint8_t *name, uint16_t name_len,
         const uint8_t *data, uint32_t data_len, uint16_t flags)
 {
@@ -782,7 +855,7 @@ File *FileOpenFile(FileContainer *ffc, const StreamingBufferConfig *sbcfg,
         SCLogDebug("not doing sha256 for this file");
         ff->flags |= FILE_NOSHA256;
     }
-    if (flags & FILE_USE_DETECT) {
+    if (!g_detect_disabled && flags & FILE_USE_DETECT) {
         SCLogDebug("considering content_inspect tracker when pruning");
         ff->flags |= FILE_USE_DETECT;
     }
@@ -826,20 +899,23 @@ File *FileOpenFile(FileContainer *ffc, const StreamingBufferConfig *sbcfg,
 
     SCReturnPtr(ff, "File");
 }
-File *FileOpenFileWithId(FileContainer *ffc, const StreamingBufferConfig *sbcfg,
+
+/**
+ *  \retval 0 ok
+ *  \retval -1 failed */
+int FileOpenFileWithId(FileContainer *ffc, const StreamingBufferConfig *sbcfg,
         uint32_t track_id, const uint8_t *name, uint16_t name_len,
         const uint8_t *data, uint32_t data_len, uint16_t flags)
 {
     File *ff = FileOpenFile(ffc, sbcfg, name, name_len, data, data_len, flags);
     if (ff == NULL)
-        return NULL;
+        return -1;
 
     ff->file_track_id = track_id;
-    ff->flags |= FILE_USE_TRACKID;
-    return ff;
+    return 0;
 }
 
-static int FileCloseFilePtr(File *ff, const uint8_t *data,
+int FileCloseFilePtr(File *ff, const uint8_t *data,
         uint32_t data_len, uint16_t flags)
 {
     SCEnter();
@@ -879,6 +955,12 @@ static int FileCloseFilePtr(File *ff, const uint8_t *data,
         if (flags & FILE_NOSTORE) {
             SCLogDebug("not storing this file");
             ff->flags |= FILE_NOSTORE;
+        } else {
+#ifdef HAVE_NSS
+            if (g_file_force_sha256 && ff->sha256_ctx) {
+                FileEndSha256(ff);
+            }
+#endif
         }
     } else {
         ff->state = FILE_STATE_CLOSED;
@@ -896,9 +978,7 @@ static int FileCloseFilePtr(File *ff, const uint8_t *data,
             ff->flags |= FILE_SHA1;
         }
         if (ff->sha256_ctx) {
-            unsigned int len = 0;
-            HASH_End(ff->sha256_ctx, ff->sha256, &len, sizeof(ff->sha256));
-            ff->flags |= FILE_SHA256;
+            FileEndSha256(ff);
         }
 #endif
     }
@@ -932,6 +1012,7 @@ int FileCloseFile(FileContainer *ffc, const uint8_t *data,
 
     SCReturnInt(0);
 }
+
 int FileCloseFileById(FileContainer *ffc, uint32_t track_id,
         const uint8_t *data, uint32_t data_len, uint16_t flags)
 {
@@ -944,10 +1025,8 @@ int FileCloseFileById(FileContainer *ffc, uint32_t track_id,
     File *ff = ffc->head;
     for ( ; ff != NULL; ff = ff->next) {
         if (track_id == ff->file_track_id) {
-            if (FileCloseFilePtr(ff, data, data_len, flags) == -1) {
-                SCReturnInt(-1);
-            }
-            SCReturnInt(0);
+            int r = FileCloseFilePtr(ff, data, data_len, flags);
+            SCReturnInt(r);
         }
     }
     SCReturnInt(-1);
@@ -1236,7 +1315,7 @@ void FileStoreFileById(FileContainer *fc, uint32_t file_id)
 
     if (fc != NULL) {
         for (ptr = fc->head; ptr != NULL; ptr = ptr->next) {
-            if (ptr->file_store_id == file_id) {
+            if (ptr->file_track_id == file_id) {
                 FileStore(ptr);
             }
         }
@@ -1285,3 +1364,17 @@ void FileTruncateAllOpenFiles(FileContainer *fc)
         }
     }
 }
+
+/**
+ * \brief Finish the SHA256 calculation.
+ */
+#ifdef HAVE_NSS
+static void FileEndSha256(File *ff)
+{
+    if (!(ff->flags & FILE_SHA256) && ff->sha256_ctx) {
+        unsigned int len = 0;
+        HASH_End(ff->sha256_ctx, ff->sha256, &len, sizeof(ff->sha256));
+        ff->flags |= FILE_SHA256;
+    }
+}
+#endif

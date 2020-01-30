@@ -45,6 +45,8 @@
 
 /**
  * \brief The various log levels
+ * NOTE: when adding new level, don't forget to update SCLogMapLogLevelToSyslogLevel()
+  *      or it may result in logging to syslog with LOG_EMERG priority.
  */
 typedef enum {
     SC_LOG_NOTSET = -1,
@@ -97,7 +99,7 @@ typedef enum {
 #define SC_LOG_DEF_LOG_OP_IFACE SC_LOG_OP_IFACE_CONSOLE
 
 /* The default log file to be used */
-#define SC_LOG_DEF_LOG_FILE "sc_ids_log.log"
+#define SC_LOG_DEF_LOG_FILE "suricata.log"
 
 /* The default syslog facility to be used */
 #define SC_LOG_DEF_SYSLOG_FACILITY_STR "local0"
@@ -350,6 +352,8 @@ extern int sc_log_module_cleaned;
 
 #define SCReturnPtr(x, type)            return x
 
+#define SCReturnBool(x)                 return x
+
 /* Please use it only for debugging purposes */
 #else
 
@@ -532,6 +536,24 @@ extern int sc_log_module_cleaned;
                                   return x;                                  \
                               } while(0)
 
+/**
+ * \brief Macro used to log debug messages on function exit.  Comes under the
+ *        debugging sybsystem, and hence will be enabled only in the presence
+ *        of the DEBUG macro.  Apart from logging function_exit logs, it also
+ *        processes the FD filters, if any FD filters are registered.  This
+ *        function_exit macro should be used for functions that returns a
+ *        boolean value.
+ *
+ * \retval x Variable of type 'bool' that has to be returned
+ */
+#define SCReturnBool(x)        do {                                           \
+                                  if (sc_log_global_log_level >= SC_LOG_DEBUG) { \
+                                      SCLogDebug("Returning: %s ... <<", x ? "true" : "false"); \
+                                      SCLogCheckFDFilterExit(__FUNCTION__);  \
+                                  }                                          \
+                                  return x;                                  \
+                              } while(0)
+
 #endif /* DEBUG */
 
 #define FatalError(x, ...) do {                                             \
@@ -541,6 +563,7 @@ extern int sc_log_module_cleaned;
 
 /** \brief Fatal error IF we're starting up, and configured to consider
  *         errors to be fatal errors */
+#if !defined(__clang_analyzer__)
 #define FatalErrorOnInit(x, ...) do {                                       \
     int init_errors_fatal = 0;                                              \
     ConfGetBool("engine.init-failure-fatal", &init_errors_fatal);           \
@@ -551,7 +574,10 @@ extern int sc_log_module_cleaned;
     }                                                                       \
     SCLogWarning(x, __VA_ARGS__);                                           \
 } while(0)
-
+/* make it simpler for scan-build */
+#else
+#define FatalErrorOnInit(x, ...) FatalError(x, __VA_ARGS__)
+#endif
 
 SCLogInitData *SCLogAllocLogInitData(void);
 

@@ -88,8 +88,9 @@ static void AlertSyslogDeInitCtx(OutputCtx *output_ctx)
  * \param conf The configuration node for this output.
  * \return A OutputCtx pointer on success, NULL on failure.
  */
-static OutputCtx *AlertSyslogInitCtx(ConfNode *conf)
+static OutputInitResult AlertSyslogInitCtx(ConfNode *conf)
 {
+    OutputInitResult result = { NULL, false };
     const char *facility_s = ConfNodeLookupChildValue(conf, "facility");
     if (facility_s == NULL) {
         facility_s = DEFAULT_ALERT_SYSLOG_FACILITY_STR;
@@ -98,7 +99,7 @@ static OutputCtx *AlertSyslogInitCtx(ConfNode *conf)
     LogFileCtx *logfile_ctx = LogFileNewCtx();
     if (logfile_ctx == NULL) {
         SCLogDebug("AlertSyslogInitCtx: Could not create new LogFileCtx");
-        return NULL;
+        return result;
     }
 
     int facility = SCMapEnumNameToValue(facility_s, SCSyslogGetFacilityMap());
@@ -125,8 +126,9 @@ static OutputCtx *AlertSyslogInitCtx(ConfNode *conf)
 
     OutputCtx *output_ctx = SCMalloc(sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
-        SCLogDebug("AlertSyslogInitCtx: Could not create new OutputCtx");
-        return NULL;
+        SCLogDebug("could not create new OutputCtx");
+        LogFileFreeCtx(logfile_ctx);
+        return result;
     }
     memset(output_ctx, 0x00, sizeof(OutputCtx));
 
@@ -135,7 +137,9 @@ static OutputCtx *AlertSyslogInitCtx(ConfNode *conf)
 
     SCLogInfo("Syslog output initialized");
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
 /**
@@ -309,8 +313,6 @@ static TmEcode AlertSyslogIPv6(ThreadVars *tv, const Packet *p, void *data)
  * \param tv    Pointer to the threadvars
  * \param p     Pointer to the packet
  * \param data  pointer to the AlertSyslogThread
- * \param pq    pointer the to packet queue
- * \param postpq pointer to the post processed packet queue
  *
  * \return On succes return TM_ECODE_OK
  */

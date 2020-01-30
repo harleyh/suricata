@@ -44,7 +44,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 /*prototypes*/
-static int DetectStreamSizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+static int DetectStreamSizeMatch (DetectEngineThreadCtx *, Packet *,
         const Signature *, const SigMatchCtx *);
 static int DetectStreamSizeSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectStreamSizeFree(void *);
@@ -78,7 +78,9 @@ void DetectStreamSizeRegister(void)
  *  \retval 1 on success and 0 on failure.
  */
 
-static int DetectStreamSizeCompare (uint32_t diff, uint32_t stream_size, uint8_t mode) {
+static int DetectStreamSizeCompare (uint32_t diff, uint32_t stream_size, uint8_t mode)
+{
+    SCLogDebug("diff %u stream_size %u mode %u", diff, stream_size, mode);
 
     int ret = 0;
     switch (mode) {
@@ -108,7 +110,7 @@ static int DetectStreamSizeCompare (uint32_t diff, uint32_t stream_size, uint8_t
             break;
     }
 
-    return ret;
+    SCReturnInt(ret);
 }
 
 /**
@@ -122,25 +124,21 @@ static int DetectStreamSizeCompare (uint32_t diff, uint32_t stream_size, uint8_t
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+static int DetectStreamSizeMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
         const Signature *s, const SigMatchCtx *ctx)
 {
 
-    int ret = 0;
     const DetectStreamSizeData *sd = (const DetectStreamSizeData *)ctx;
 
     if (!(PKT_IS_TCP(p)))
-        return ret;
+        return 0;
+    if (p->flow == NULL || p->flow->protoctx == NULL)
+        return 0;
 
+    const TcpSession *ssn = (TcpSession *)p->flow->protoctx;
+    int ret = 0;
     uint32_t csdiff = 0;
     uint32_t ssdiff = 0;
-
-    if (p->flow == NULL)
-        return ret;
-
-    TcpSession *ssn = (TcpSession *)p->flow->protoctx;
-    if (ssn == NULL)
-        return ret;
 
     if (sd->flags & STREAM_SIZE_SERVER) {
         /* get the server stream size */
@@ -155,17 +153,21 @@ static int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     } else if (sd->flags & STREAM_SIZE_BOTH) {
         ssdiff = ssn->server.next_seq - ssn->server.isn;
         csdiff = ssn->client.next_seq - ssn->client.isn;
-        if (DetectStreamSizeCompare(ssdiff, sd->ssize, sd->mode) && DetectStreamSizeCompare(csdiff, sd->ssize, sd->mode))
+
+        if (DetectStreamSizeCompare(ssdiff, sd->ssize, sd->mode) &&
+            DetectStreamSizeCompare(csdiff, sd->ssize, sd->mode))
             ret = 1;
 
     } else if (sd->flags & STREAM_SIZE_EITHER) {
         ssdiff = ssn->server.next_seq - ssn->server.isn;
         csdiff = ssn->client.next_seq - ssn->client.isn;
-        if (DetectStreamSizeCompare(ssdiff, sd->ssize, sd->mode) || DetectStreamSizeCompare(csdiff, sd->ssize, sd->mode))
+
+        if (DetectStreamSizeCompare(ssdiff, sd->ssize, sd->mode) ||
+            DetectStreamSizeCompare(csdiff, sd->ssize, sd->mode))
             ret = 1;
     }
 
-    return ret;
+    SCReturnInt(ret);
 }
 
 /**
@@ -430,7 +432,7 @@ static int DetectStreamSizeParseTest03 (void)
     p->tcph = &tcph;
     sm.ctx = (SigMatchCtx*)sd;
 
-    result = DetectStreamSizeMatch(&tv, &dtx, p, &s, sm.ctx);
+    result = DetectStreamSizeMatch(&dtx, p, &s, sm.ctx);
     if (result == 0) {
         printf("result 0 != 1: ");
     }
@@ -490,7 +492,7 @@ static int DetectStreamSizeParseTest04 (void)
     p->ip4h = &ip4h;
     sm.ctx = (SigMatchCtx*)sd;
 
-    if (!DetectStreamSizeMatch(&tv, &dtx, p, &s, sm.ctx))
+    if (!DetectStreamSizeMatch(&dtx, p, &s, sm.ctx))
         result = 1;
 
     SCFree(p);

@@ -29,8 +29,7 @@
 #include "app-layer-dnp3.h"
 #include "app-layer-dnp3-objects.h"
 #include "output-json-dnp3-objects.h"
-
-#ifdef HAVE_LIBJANSSON
+#include "output-json.h"
 
 void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
     DNP3Point *point)
@@ -2133,7 +2132,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->filename_size + 1];
                 memcpy(tmpbuf, data->filename, data->filename_size);
                 tmpbuf[data->filename_size] = '\0';
-                json_object_set_new(js, "filename", json_string(tmpbuf));
+                json_object_set_new(js, "filename", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "filename", json_string(""));
             }
@@ -2145,7 +2144,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->data_size + 1];
                 memcpy(tmpbuf, data->data, data->data_size);
                 tmpbuf[data->data_size] = '\0';
-                json_object_set_new(js, "data", json_string(tmpbuf));
+                json_object_set_new(js, "data", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "data", json_string(""));
             }
@@ -2169,7 +2168,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->username_size + 1];
                 memcpy(tmpbuf, data->username, data->username_size);
                 tmpbuf[data->username_size] = '\0';
-                json_object_set_new(js, "username", json_string(tmpbuf));
+                json_object_set_new(js, "username", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "username", json_string(""));
             }
@@ -2179,7 +2178,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->password_size + 1];
                 memcpy(tmpbuf, data->password, data->password_size);
                 tmpbuf[data->password_size] = '\0';
-                json_object_set_new(js, "password", json_string(tmpbuf));
+                json_object_set_new(js, "password", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "password", json_string(""));
             }
@@ -2211,7 +2210,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->filename_size + 1];
                 memcpy(tmpbuf, data->filename, data->filename_size);
                 tmpbuf[data->filename_size] = '\0';
-                json_object_set_new(js, "filename", json_string(tmpbuf));
+                json_object_set_new(js, "filename", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "filename", json_string(""));
             }
@@ -2235,7 +2234,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->optional_text_len + 1];
                 memcpy(tmpbuf, data->optional_text, data->optional_text_len);
                 tmpbuf[data->optional_text_len] = '\0';
-                json_object_set_new(js, "optional_text", json_string(tmpbuf));
+                json_object_set_new(js, "optional_text", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "optional_text", json_string(""));
             }
@@ -2253,7 +2252,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->file_data_len + 1];
                 memcpy(tmpbuf, data->file_data, data->file_data_len);
                 tmpbuf[data->file_data_len] = '\0';
-                json_object_set_new(js, "file_data", json_string(tmpbuf));
+                json_object_set_new(js, "file_data", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "file_data", json_string(""));
             }
@@ -2273,7 +2272,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->optional_text_len + 1];
                 memcpy(tmpbuf, data->optional_text, data->optional_text_len);
                 tmpbuf[data->optional_text_len] = '\0';
-                json_object_set_new(js, "optional_text", json_string(tmpbuf));
+                json_object_set_new(js, "optional_text", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "optional_text", json_string(""));
             }
@@ -2301,7 +2300,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->filename_size + 1];
                 memcpy(tmpbuf, data->filename, data->filename_size);
                 tmpbuf[data->filename_size] = '\0';
-                json_object_set_new(js, "filename", json_string(tmpbuf));
+                json_object_set_new(js, "filename", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "filename", json_string(""));
             }
@@ -2315,7 +2314,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->file_specification_len + 1];
                 memcpy(tmpbuf, data->file_specification, data->file_specification_len);
                 tmpbuf[data->file_specification_len] = '\0';
-                json_object_set_new(js, "file_specification", json_string(tmpbuf));
+                json_object_set_new(js, "file_specification", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "file_specification", json_string(""));
             }
@@ -2341,7 +2340,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
         }
         case DNP3_OBJECT_CODE(83, 1): {
             DNP3ObjectG83V1 *data = point->data;
-            json_object_set_new(js, "data->vendor_code", json_string(data->vendor_code));
+            json_object_set_new(js, "data->vendor_code", SCJsonString(data->vendor_code));
             json_object_set_new(js, "object_id",
                 json_integer(data->object_id));
             json_object_set_new(js, "length",
@@ -2486,7 +2485,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->error_text_len + 1];
                 memcpy(tmpbuf, data->error_text, data->error_text_len);
                 tmpbuf[data->error_text_len] = '\0';
-                json_object_set_new(js, "error_text", json_string(tmpbuf));
+                json_object_set_new(js, "error_text", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "error_text", json_string(""));
             }
@@ -2540,7 +2539,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->username_len + 1];
                 memcpy(tmpbuf, data->username, data->username_len);
                 tmpbuf[data->username_len] = '\0';
-                json_object_set_new(js, "username", json_string(tmpbuf));
+                json_object_set_new(js, "username", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "username", json_string(""));
             }
@@ -2572,7 +2571,7 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
                 char tmpbuf[data->username_len + 1];
                 memcpy(tmpbuf, data->username, data->username_len);
                 tmpbuf[data->username_len] = '\0';
-                json_object_set_new(js, "username", json_string(tmpbuf));
+                json_object_set_new(js, "username", SCJsonString(tmpbuf));
             } else {
                 json_object_set_new(js, "username", json_string(""));
             }
@@ -2717,5 +2716,3 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
     }
 
 }
-
-#endif /* HAVE_LIBJANSSON */

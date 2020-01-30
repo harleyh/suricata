@@ -87,7 +87,7 @@ void DetectPcreRegister (void)
 {
     sigmatch_table[DETECT_PCRE].name = "pcre";
     sigmatch_table[DETECT_PCRE].desc = "match on regular expression";
-    sigmatch_table[DETECT_PCRE].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#pcre-perl-compatible-regular-expressions";
+    sigmatch_table[DETECT_PCRE].url = DOC_URL DOC_VERSION "/rules/payload-keywords.html#pcre-perl-compatible-regular-expressions";
     sigmatch_table[DETECT_PCRE].Match = NULL;
     sigmatch_table[DETECT_PCRE].Setup = DetectPcreSetup;
     sigmatch_table[DETECT_PCRE].Free  = DetectPcreFree;
@@ -170,13 +170,13 @@ void DetectPcreRegister (void)
  */
 int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, const Signature *s,
                            const SigMatchData *smd, Packet *p, Flow *f,
-                           uint8_t *payload, uint32_t payload_len)
+                           const uint8_t *payload, uint32_t payload_len)
 {
     SCEnter();
 #define MAX_SUBSTRINGS 30
     int ret = 0;
     int ov[MAX_SUBSTRINGS];
-    uint8_t *ptr = NULL;
+    const uint8_t *ptr = NULL;
     uint16_t len = 0;
     uint16_t capture_len = 0;
 
@@ -223,19 +223,23 @@ int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, const Signature *s,
                 uint8_t x;
                 for (x = 0; x < pe->idx; x++) {
                     SCLogDebug("capturing %u", x);
-                    const char *str_ptr;
+                    const char *str_ptr = NULL;
                     ret = pcre_get_substring((char *)ptr, ov, MAX_SUBSTRINGS, x+1, &str_ptr);
-                    if (unlikely(ret == 0))
+                    if (unlikely(ret == 0)) {
+                        pcre_free_substring(str_ptr);
                         continue;
+                    }
 
                     SCLogDebug("data %p/%u, type %u id %u p %p",
                             str_ptr, ret, pe->captypes[x], pe->capids[x], p);
 
                     if (pe->captypes[x] == VAR_TYPE_PKT_VAR_KV) {
                         /* get the value, as first capture is the key */
-                        const char *str_ptr2;
+                        const char *str_ptr2 = NULL;
                         int ret2 = pcre_get_substring((char *)ptr, ov, MAX_SUBSTRINGS, x+2, &str_ptr2);
                         if (unlikely(ret2 == 0)) {
+                            pcre_free_substring(str_ptr);
+                            pcre_free_substring(str_ptr2);
                             break;
                         }
                         /* key length is limited to 256 chars */
@@ -320,8 +324,9 @@ static int DetectPcreHasUpperCase(const char *re)
     return 0;
 }
 
-static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *regexstr, int *sm_list,
-        char *capture_names, size_t capture_names_size, bool negate)
+static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx,
+        const char *regexstr, int *sm_list, char *capture_names,
+        size_t capture_names_size, bool negate, AppProto *alproto)
 {
     int ec;
     const char *eb;
@@ -462,6 +467,7 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *reg
                     }
                     int list = DetectBufferTypeGetByName("http_uri");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 case 'V': {
@@ -471,6 +477,7 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *reg
                     }
                     int list = DetectBufferTypeGetByName("http_user_agent");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 case 'W': {
@@ -480,6 +487,7 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *reg
                     }
                     int list = DetectBufferTypeGetByName("http_host");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     check_host_header = 1;
                     break;
                 }
@@ -490,6 +498,7 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *reg
                     }
                     int list = DetectBufferTypeGetByName("http_raw_host");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 case 'H': { /* snort's option */
@@ -499,6 +508,7 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *reg
                     }
                     int list = DetectBufferTypeGetByName("http_header");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 } case 'I': { /* snort's option */
                     if (pd->flags & DETECT_PCRE_RAWBYTES) {
@@ -507,11 +517,13 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *reg
                     }
                     int list = DetectBufferTypeGetByName("http_raw_uri");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 case 'D': { /* snort's option */
                     int list = DetectBufferTypeGetByName("http_raw_header");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 case 'M': { /* snort's option */
@@ -521,6 +533,7 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *reg
                     }
                     int list = DetectBufferTypeGetByName("http_method");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 case 'C': { /* snort's option */
@@ -530,30 +543,35 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *reg
                     }
                     int list = DetectBufferTypeGetByName("http_cookie");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 case 'P': {
                     /* snort's option (http request body inspection) */
                     int list = DetectBufferTypeGetByName("http_client_body");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 case 'Q': {
                     int list = DetectBufferTypeGetByName("file_data");
                     /* suricata extension (http response body inspection) */
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 case 'Y': {
                     /* snort's option */
                     int list = DetectBufferTypeGetByName("http_stat_msg");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 case 'S': {
                     /* snort's option */
                     int list = DetectBufferTypeGetByName("http_stat_code");
                     *sm_list = DetectPcreSetList(*sm_list, list);
+                    *alproto = ALPROTO_HTTP;
                     break;
                 }
                 default:
@@ -657,7 +675,6 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *reg
     } else {
         goto error;
     }
-
     return pd;
 
 error:
@@ -813,9 +830,11 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, const char *r
     int ret = -1;
     int parsed_sm_list = DETECT_SM_LIST_NOTSET;
     char capture_names[1024] = "";
+    AppProto alproto = ALPROTO_UNKNOWN;
 
     pd = DetectPcreParse(de_ctx, regexstr, &parsed_sm_list,
-            capture_names, sizeof(capture_names), s->init_data->negated);
+            capture_names, sizeof(capture_names), s->init_data->negated,
+            &alproto);
     if (pd == NULL)
         goto error;
     if (DetectPcreParseCapture(regexstr, de_ctx, pd, capture_names) < 0)
@@ -823,6 +842,9 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, const char *r
 
     int sm_list = -1;
     if (s->init_data->list != DETECT_SM_LIST_NOTSET) {
+        if (DetectBufferGetActiveList(de_ctx, s) == -1)
+            goto error;
+
         s->flags |= SIG_FLAG_APPLAYER;
         sm_list = s->init_data->list;
     } else {
@@ -830,9 +852,19 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, const char *r
             case DETECT_SM_LIST_NOTSET:
                 sm_list = DETECT_SM_LIST_PMATCH;
                 break;
-            default:
+            default: {
+                if (alproto != ALPROTO_UNKNOWN) {
+                    /* see if the proto doesn't conflict
+                     * with what we already have. */
+                    if (s->alproto != ALPROTO_UNKNOWN &&
+                            alproto != s->alproto) {
+                        goto error;
+                    }
+                    s->alproto = alproto;
+                }
                 sm_list = parsed_sm_list;
                 break;
+            }
         }
     }
     if (sm_list == -1)
@@ -914,8 +946,9 @@ static int DetectPcreParseTest01 (void)
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
+    AppProto alproto = ALPROTO_UNKNOWN;
 
-    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false, &alproto);
     FAIL_IF_NOT_NULL(pd);
 
     DetectEngineCtxFree(de_ctx);
@@ -933,9 +966,11 @@ static int DetectPcreParseTest02 (void)
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
+    AppProto alproto = ALPROTO_UNKNOWN;
 
-    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false, &alproto);
     FAIL_IF_NOT_NULL(pd);
+    FAIL_IF_NOT(alproto == ALPROTO_HTTP);
 
     DetectEngineCtxFree(de_ctx);
     return result;
@@ -952,8 +987,9 @@ static int DetectPcreParseTest03 (void)
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
+    AppProto alproto = ALPROTO_UNKNOWN;
 
-    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false, &alproto);
     FAIL_IF_NOT_NULL(pd);
 
     DetectEngineCtxFree(de_ctx);
@@ -971,9 +1007,11 @@ static int DetectPcreParseTest04 (void)
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
+    AppProto alproto = ALPROTO_UNKNOWN;
 
-    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false, &alproto);
     FAIL_IF_NULL(pd);
+    FAIL_IF_NOT(alproto == ALPROTO_UNKNOWN);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
@@ -991,9 +1029,11 @@ static int DetectPcreParseTest05 (void)
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
+    AppProto alproto = ALPROTO_UNKNOWN;
 
-    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false, &alproto);
     FAIL_IF_NULL(pd);
+    FAIL_IF_NOT(alproto == ALPROTO_UNKNOWN);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
@@ -1011,9 +1051,11 @@ static int DetectPcreParseTest06 (void)
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
+    AppProto alproto = ALPROTO_UNKNOWN;
 
-    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false, &alproto);
     FAIL_IF_NULL(pd);
+    FAIL_IF_NOT(alproto == ALPROTO_UNKNOWN);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
@@ -1031,9 +1073,11 @@ static int DetectPcreParseTest07 (void)
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
+    AppProto alproto = ALPROTO_UNKNOWN;
 
-    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false, &alproto);
     FAIL_IF_NULL(pd);
+    FAIL_IF_NOT(alproto == ALPROTO_HTTP);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
@@ -1051,9 +1095,11 @@ static int DetectPcreParseTest08 (void)
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
+    AppProto alproto = ALPROTO_UNKNOWN;
 
-    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false, &alproto);
     FAIL_IF_NULL(pd);
+    FAIL_IF_NOT(alproto == ALPROTO_UNKNOWN);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
@@ -1071,8 +1117,9 @@ static int DetectPcreParseTest09 (void)
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
+    AppProto alproto = ALPROTO_UNKNOWN;
 
-    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false, &alproto);
     FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
@@ -1089,7 +1136,7 @@ static int DetectPcreParseTest10(void)
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    s->alproto = ALPROTO_DCERPC;
+    FAIL_IF(DetectSignatureSetAppProto(s, ALPROTO_DCERPC) < 0);
 
     FAIL_IF_NOT(DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
     FAIL_IF_NOT(s->sm_lists[g_dce_stub_data_buffer_id] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
@@ -1607,7 +1654,6 @@ static int DetectPcreTestSig01(void)
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f->alproto = ALPROTO_HTTP;
-
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF(de_ctx == NULL);
 
@@ -3415,30 +3461,30 @@ static int DetectPcreFlowvarCapture03(void)
  */
 static int DetectPcreParseHttpHost(void)
 {
-    DetectPcreData *pd = NULL;
+    AppProto alproto = ALPROTO_UNKNOWN;
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
 
     FAIL_IF(de_ctx == NULL);
 
-    pd = DetectPcreParse(de_ctx, "/domain\\.com/W", &list, NULL, 0, false);
+    DetectPcreData *pd = DetectPcreParse(de_ctx, "/domain\\.com/W", &list, NULL, 0, false, &alproto);
     FAIL_IF(pd == NULL);
     DetectPcreFree(pd);
 
     list = DETECT_SM_LIST_NOTSET;
-    pd = DetectPcreParse(de_ctx, "/dOmain\\.com/W", &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, "/dOmain\\.com/W", &list, NULL, 0, false, &alproto);
     FAIL_IF(pd != NULL);
 
     /* Uppercase meta characters are valid. */
     list = DETECT_SM_LIST_NOTSET;
-    pd = DetectPcreParse(de_ctx, "/domain\\D+\\.com/W", &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, "/domain\\D+\\.com/W", &list, NULL, 0, false, &alproto);
     FAIL_IF(pd == NULL);
     DetectPcreFree(pd);
 
     /* This should not parse as the first \ escapes the second \, then
      * we have a D. */
     list = DETECT_SM_LIST_NOTSET;
-    pd = DetectPcreParse(de_ctx, "/\\\\Ddomain\\.com/W", &list, NULL, 0, false);
+    pd = DetectPcreParse(de_ctx, "/\\\\Ddomain\\.com/W", &list, NULL, 0, false, &alproto);
     FAIL_IF(pd != NULL);
 
     DetectEngineCtxFree(de_ctx);

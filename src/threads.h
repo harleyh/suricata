@@ -101,9 +101,7 @@ enum {
 
 //#define DBG_THREADS
 
-#ifdef __tile__
-    #include "threads-arch-tile.h"
-#elif defined DBG_THREADS
+#if defined DBG_THREADS
     #ifdef PROFILE_LOCKING
         #error "Cannot mix DBG_THREADS and PROFILE_LOCKING"
     #endif
@@ -157,7 +155,7 @@ enum {
 #define SCCtrlCondDestroy pthread_cond_destroy
 
 /* spinlocks */
-#if ((_POSIX_SPIN_LOCKS - 200112L) < 0L) || defined HELGRIND
+#if ((_POSIX_SPIN_LOCKS - 200112L) < 0L) || defined HELGRIND || !defined(HAVE_PTHREAD_SPIN_UNLOCK)
 #define SCSpinlock                              SCMutex
 #define SCSpinLock(spin)                        SCMutexLock((spin))
 #define SCSpinTrylock(spin)                     SCMutexTrylock((spin))
@@ -173,7 +171,7 @@ enum {
 #define SCSpinDestroy(spin)                     pthread_spin_destroy(spin)
 #endif /* no spinlocks */
 
-#endif /* __tile__ */
+#endif
 
 #if (!defined SCMutex       || !defined SCMutexAttr     || !defined SCMutexInit || \
      !defined SCMutexLock   || !defined SCMutexTrylock  || \

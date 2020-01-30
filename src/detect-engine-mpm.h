@@ -32,6 +32,8 @@
 
 #include "stream.h"
 
+void DetectMpmInitializePktMpms(DetectEngineCtx *de_ctx);
+int DetectMpmPreparePktMpms(DetectEngineCtx *de_ctx);
 void DetectMpmInitializeAppMpms(DetectEngineCtx *de_ctx);
 int DetectMpmPrepareAppMpms(DetectEngineCtx *de_ctx);
 void DetectMpmInitializeBuiltinMpms(DetectEngineCtx *de_ctx);
@@ -42,7 +44,7 @@ uint32_t PatternStrength(uint8_t *, uint16_t);
 uint16_t PatternMatchDefaultMatcher(void);
 uint32_t DnsQueryPatternSearch(DetectEngineThreadCtx *det_ctx, uint8_t *buffer, uint32_t buffer_len, uint8_t flags);
 
-void PacketPatternCleanup(ThreadVars *, DetectEngineThreadCtx *);
+void PacketPatternCleanup(DetectEngineThreadCtx *);
 
 void PatternMatchPrepare(MpmCtx *, uint16_t);
 void PatternMatchThreadPrepare(MpmThreadCtx *, uint16_t type);
@@ -60,7 +62,7 @@ TmEcode DetectEngineThreadCtxDeinit(ThreadVars *, void *);
 int SignatureHasPacketContent(const Signature *);
 int SignatureHasStreamContent(const Signature *);
 
-void RetrieveFPForSig(Signature *s);
+void RetrieveFPForSig(const DetectEngineCtx *de_ctx, Signature *s);
 
 int MpmStoreInit(DetectEngineCtx *);
 void MpmStoreFree(DetectEngineCtx *);
@@ -79,16 +81,44 @@ MpmStore *MpmStorePrepareBuffer(DetectEngineCtx *de_ctx, SigGroupHead *sgh, enum
 int DetectSetFastPatternAndItsId(DetectEngineCtx *de_ctx);
 
 /** \brief register an app layer keyword for mpm
- *  \param name keyword name
+ *  \param name buffer name
  *  \param direction SIG_FLAG_TOSERVER or SIG_FLAG_TOCLIENT
+ *  \param priority mpm keyword priority
  *  \param PrefilterRegister Prefilter api registration function
+ *  \param GetData callback to setup a InspectBuffer. May be NULL.
+ *  \param alproto AppProto this MPM engine inspects
+ *  \param tx_min_progress min tx progress needed to invoke this engine.
  *
  *  \note direction must be set to either toserver or toclient.
  *        If both are needed, register the keyword twice.
  */
-void DetectAppLayerMpmRegister(const char *name,
+void DetectAppLayerMpmRegister2(const char *name,
         int direction, int priority,
-        int (*PrefilterRegister)(SigGroupHead *sgh, MpmCtx *mpm_ctx));
+        int (*PrefilterRegister)(DetectEngineCtx *de_ctx,
+            SigGroupHead *sgh, MpmCtx *mpm_ctx,
+            const DetectBufferMpmRegistery *mpm_reg, int list_id),
+        InspectionBufferGetDataPtr GetData,
+        AppProto alproto, int tx_min_progress);
+void DetectAppLayerMpmRegisterByParentId(
+        DetectEngineCtx *de_ctx,
+        const int id, const int parent_id,
+        DetectEngineTransforms *transforms);
+
+void DetectPktMpmRegister(const char *name,
+        int priority,
+        int (*PrefilterRegister)(DetectEngineCtx *de_ctx,
+            SigGroupHead *sgh, MpmCtx *mpm_ctx,
+            const DetectBufferMpmRegistery *mpm_reg, int list_id),
+        InspectionBufferGetPktDataPtr GetData);
+void DetectPktMpmRegisterByParentId(DetectEngineCtx *de_ctx,
+        const int id, const int parent_id,
+        DetectEngineTransforms *transforms);
+
+
+int PrefilterGenericMpmPktRegister(DetectEngineCtx *de_ctx,
+         SigGroupHead *sgh, MpmCtx *mpm_ctx,
+         const DetectBufferMpmRegistery *mpm_reg, int list_id);
+
 
 #endif /* __DETECT_ENGINE_MPM_H__ */
 

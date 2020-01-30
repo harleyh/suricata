@@ -158,8 +158,6 @@ output_json_dnp3_objects_template = """/* Copyright (C) 2015 Open Information Se
 #include "app-layer-dnp3-objects.h"
 #include "output-json-dnp3-objects.h"
 
-#ifdef HAVE_LIBJANSSON
-
 void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
     DNP3Point *point)
 {
@@ -214,8 +212,6 @@ void OutputJsonDNP3SetItem(json_t *js, DNP3Object *object,
     }
 
 }
-
-#endif /* HAVE_LIBJANSSON */
 
 """
 
@@ -527,6 +523,10 @@ static int DNP3DecodeObjectG{{object.group}}V{{object.variation}}(const uint8_t 
         object->{{field.len_field}} = prefix - (offset - *len);
 {% endif %}
         if (object->{{field.len_field}} > 0) {
+            if (*len < object->{{field.len_field}}) {
+                /* Not enough data. */
+                goto error;
+            }
             memcpy(object->{{field.name}}, *buf, object->{{field.len_field}});
             *buf += object->{{field.len_field}};
             *len -= object->{{field.len_field}};
@@ -538,20 +538,20 @@ static int DNP3DecodeObjectG{{object.group}}V{{object.variation}}(const uint8_t 
             if (!DNP3ReadUint8(buf, len, &octet)) {
                 goto error;
             }
-{% set shift = 0 %}
+{% set ns = namespace(shift=0) %}
 {% for field in field.fields %}
 {% if field.width == 1 %}
-            object->{{field.name}} = (octet >> {{shift}}) & 0x1;
+            object->{{field.name}} = (octet >> {{ns.shift}}) & 0x1;
 {% elif field.width == 2 %}
-            object->{{field.name}} = (octet >> {{shift}}) & 0x3;
+            object->{{field.name}} = (octet >> {{ns.shift}}) & 0x3;
 {% elif field.width == 4 %}
-            object->{{field.name}} = (octet >> {{shift}}) & 0xf;
+            object->{{field.name}} = (octet >> {{ns.shift}}) & 0xf;
 {% elif field.width == 7 %}
-            object->{{field.name}} = (octet >> {{shift}}) & 0x7f;
+            object->{{field.name}} = (octet >> {{ns.shift}}) & 0x7f;
 {% else %}
 {{ raise("Unhandled width of %d." % (field.width)) }}
 {% endif %}
-{% set shift = shift + field.width %}
+{% set ns.shift = ns.shift + field.width %}
 {% endfor %}
         }
 {% else %}
@@ -700,6 +700,12 @@ def preprocess_object(obj):
     return obj
 
 def main():
+
+    # Require Jinja2 2.10 or greater.
+    jv = jinja2.__version__.split(".")
+    if int(jv[0]) < 2 or (int(jv[0]) == 2 and int(jv[1]) < 10):
+        print("error: jinja2 v2.10 or great required")
+        return 1
 
     definitions = yaml.load(open("scripts/dnp3-gen/dnp3-objects.yaml"))
     print("Loaded %s objects." % (len(definitions["objects"])))

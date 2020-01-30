@@ -40,13 +40,11 @@ enum {
 };
 
 /* prototypes */
-int SigParse(DetectEngineCtx *, Signature *, const char *, uint8_t);
 Signature *SigAlloc(void);
 void SigFree(Signature *s);
 Signature *SigInit(DetectEngineCtx *, const char *sigstr);
 Signature *SigInitReal(DetectEngineCtx *, const char *);
 SigMatchData* SigMatchList2DataArray(SigMatch *head);
-void SigParsePrepare(void);
 void SigParseRegisterTests(void);
 Signature *DetectEngineAppendSig(DetectEngineCtx *, const char *);
 
@@ -61,16 +59,23 @@ int DetectEngineContentModifierBufferSetup(DetectEngineCtx *de_ctx,
         Signature *s, const char *arg, int sm_type, int sm_list,
         AppProto alproto);
 
+bool SigMatchSilentErrorEnabled(const DetectEngineCtx *de_ctx,
+        const enum DetectKeywordId id);
+bool SigMatchStrictEnabled(const enum DetectKeywordId id);
+
 const char *DetectListToHumanString(int list);
 const char *DetectListToString(int list);
 
+void SigTableApplyStrictCommandlineOption(const char *str);
+
 SigMatch *DetectGetLastSM(const Signature *);
-SigMatch *DetectGetLastSMFromMpmLists(const Signature *s);
+SigMatch *DetectGetLastSMFromMpmLists(const DetectEngineCtx *de_ctx, const Signature *s);
 SigMatch *DetectGetLastSMFromLists(const Signature *s, ...);
 SigMatch *DetectGetLastSMByListPtr(const Signature *s, SigMatch *sm_list, ...);
 SigMatch *DetectGetLastSMByListId(const Signature *s, int list_id, ...);
 
-int DetectSignatureSetAppProto(Signature *s, AppProto alproto);
+int DetectSignatureAddTransform(Signature *s, int transform);
+int WARN_UNUSED DetectSignatureSetAppProto(Signature *s, AppProto alproto);
 
 /* parse regex setup and free util funcs */
 

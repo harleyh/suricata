@@ -352,7 +352,7 @@ Packet *UTHBuildPacketSrcDst(uint8_t *payload, uint16_t payload_len,
  * \brief UTHBuildPacketSrcDst is a wrapper that build packets specifying IPs
  * and defaulting ports (IPV6)
  *
- * \param payload pointer to the payloadd buffer
+ * \param payload pointer to the payload buffer
  * \param payload_len pointer to the length of the payload
  * \param ipproto Protocols allowed atm are IPPROTO_TCP and IPPROTO_UDP
  *
@@ -433,6 +433,14 @@ void UTHFreePacket(Packet *p)
     }
 #endif
     SCFree(p);
+}
+
+void UTHAssignFlow(Packet *p, Flow *f)
+{
+    if (p && f) {
+        p->flow = f;
+        p->flags |= PKT_HAS_FLOW;
+    }
 }
 
 Flow *UTHBuildFlow(int family, const char *src, const char *dst, Port sp, Port dp)
@@ -917,6 +925,24 @@ uint32_t UTHBuildPacketOfFlows(uint32_t start, uint32_t end, uint8_t dir)
     return i;
 }
 
+/** \brief parser a sig and see if the expected result is correct */
+int UTHParseSignature(const char *str, bool expect)
+{
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
+
+    Signature *s = DetectEngineAppendSig(de_ctx, str);
+    if (expect)
+        FAIL_IF_NULL(s);
+    else
+        FAIL_IF_NOT_NULL(s);
+
+    DetectEngineCtxFree(de_ctx);
+    PASS;
+}
+
+
 /*
  * unittests for the unittest helpers
  */
@@ -960,9 +986,9 @@ static int CheckUTHTestPacket(Packet *p, uint8_t ipproto)
         case IPPROTO_TCP:
             if (p->tcph == NULL)
                 return 0;
-            if (ntohs(p->tcph->th_sport) != sport)
+            if (SCNtohs(p->tcph->th_sport) != sport)
                 return 0;
-            if (ntohs(p->tcph->th_dport) != dport)
+            if (SCNtohs(p->tcph->th_dport) != dport)
                 return 0;
         break;
     }

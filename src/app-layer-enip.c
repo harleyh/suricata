@@ -81,11 +81,31 @@ static DetectEngineState *ENIPGetTxDetectState(void *vtx)
     return tx->de_state;
 }
 
-static int ENIPSetTxDetectState(void *state, void *vtx, DetectEngineState *s)
+static int ENIPSetTxDetectState(void *vtx, DetectEngineState *s)
 {
     ENIPTransaction *tx = (ENIPTransaction *)vtx;
     tx->de_state = s;
     return 0;
+}
+
+static uint64_t ENIPGetTxDetectFlags(void *vtx, uint8_t dir)
+{
+    ENIPTransaction *tx = (ENIPTransaction *)vtx;
+    if (dir & STREAM_TOSERVER) {
+        return tx->detect_flags_ts;
+    } else {
+        return tx->detect_flags_tc;
+    }
+}
+
+static void ENIPSetTxDetectFlags(void *vtx, uint8_t dir, uint64_t flags)
+{
+    ENIPTransaction *tx = (ENIPTransaction *)vtx;
+    if (dir &STREAM_TOSERVER) {
+        tx->detect_flags_ts = flags;
+    } else {
+        tx->detect_flags_tc = flags;
+    }
 }
 
 static void *ENIPGetTx(void *alstate, uint64_t tx_id)
@@ -112,25 +132,9 @@ static uint64_t ENIPGetTxCnt(void *alstate)
     return ((uint64_t) ((ENIPState *) alstate)->transaction_max);
 }
 
-static AppLayerDecoderEvents *ENIPGetEvents(void *state, uint64_t id)
+static AppLayerDecoderEvents *ENIPGetEvents(void *tx)
 {
-    ENIPState         *enip = (ENIPState *) state;
-    ENIPTransaction   *tx;
-
-    if (enip->curr && enip->curr->tx_num == (id + 1))
-        return enip->curr->decoder_events;
-
-    TAILQ_FOREACH(tx, &enip->tx_list, next) {
-        if (tx->tx_num == (id+1))
-            return tx->decoder_events;
-    }
-
-    return NULL;
-}
-
-static int ENIPHasEvents(void *state)
-{
-    return (((ENIPState *) state)->events > 0);
+    return ((ENIPTransaction *)tx)->decoder_events;
 }
 
 static int ENIPStateGetEventInfo(const char *event_name, int *event_id, AppLayerEventType *event_type)
@@ -140,6 +144,22 @@ static int ENIPStateGetEventInfo(const char *event_name, int *event_id, AppLayer
     if (*event_id == -1) {
         SCLogError(SC_ERR_INVALID_ENUM_MAP, "event \"%s\" not present in "
                    "enip's enum map table.",  event_name);
+        /* yes this is fatal */
+        return -1;
+    }
+
+    *event_type = APP_LAYER_EVENT_TYPE_TRANSACTION;
+
+    return 0;
+}
+
+static int ENIPStateGetEventInfoById(int event_id, const char **event_name,
+                                     AppLayerEventType *event_type)
+{
+    *event_name = SCMapEnumValueToName(event_id, enip_decoder_event_table);
+    if (*event_name == NULL) {
+        SCLogError(SC_ERR_INVALID_ENUM_MAP, "event \"%d\" not present in "
+                   "enip's enum map table.",  event_id);
         /* yes this is fatal */
         return -1;
     }
@@ -313,7 +333,8 @@ static void ENIPStateTransactionFree(void *state, uint64_t tx_id)
  * \retval 1 when the command is parsed, 0 otherwise
  */
 static int ENIPParse(Flow *f, void *state, AppLayerParserState *pstate,
-        uint8_t *input, uint32_t input_len, void *local_data)
+        const uint8_t *input, uint32_t input_len, void *local_data,
+        const uint8_t flags)
 {
     SCEnter();
     ENIPState *enip = (ENIPState *) state;
@@ -323,6 +344,9 @@ static int ENIPParse(Flow *f, void *state, AppLayerParserState *pstate,
             APP_LAYER_PARSER_EOF))
     {
         SCReturnInt(1);
+    } else if (input == NULL && input_len != 0) {
+        // GAP
+        SCReturnInt(0);
     } else if (input == NULL || input_len == 0)
     {
         SCReturnInt(-1);
@@ -360,8 +384,8 @@ static int ENIPParse(Flow *f, void *state, AppLayerParserState *pstate,
 
 
 
-static uint16_t ENIPProbingParser(uint8_t *input, uint32_t input_len,
-        uint32_t *offset)
+static uint16_t ENIPProbingParser(Flow *f, uint8_t direction,
+        const uint8_t *input, uint32_t input_len, uint8_t *rdir)
 {
     // SCLogDebug("ENIPProbingParser %d", input_len);
     if (input_len < sizeof(ENIPEncapHdr))
@@ -430,10 +454,9 @@ void RegisterENIPUDPParsers(void)
                 ENIPStateAlloc, ENIPStateFree);
 
         AppLayerParserRegisterGetEventsFunc(IPPROTO_UDP, ALPROTO_ENIP, ENIPGetEvents);
-        AppLayerParserRegisterHasEventsFunc(IPPROTO_UDP, ALPROTO_ENIP, ENIPHasEvents);
 
-        AppLayerParserRegisterDetectStateFuncs(IPPROTO_UDP, ALPROTO_ENIP, NULL,
-                                                       ENIPGetTxDetectState, ENIPSetTxDetectState);
+        AppLayerParserRegisterDetectStateFuncs(IPPROTO_UDP, ALPROTO_ENIP,
+                ENIPGetTxDetectState, ENIPSetTxDetectState);
 
         AppLayerParserRegisterGetTx(IPPROTO_UDP, ALPROTO_ENIP, ENIPGetTx);
         AppLayerParserRegisterGetTxCnt(IPPROTO_UDP, ALPROTO_ENIP, ENIPGetTxCnt);
@@ -443,9 +466,12 @@ void RegisterENIPUDPParsers(void)
         AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_ENIP, ENIPGetAlstateProgressCompletionStatus);
 
         AppLayerParserRegisterGetEventInfo(IPPROTO_UDP, ALPROTO_ENIP, ENIPStateGetEventInfo);
+        AppLayerParserRegisterGetEventInfoById(IPPROTO_UDP, ALPROTO_ENIP, ENIPStateGetEventInfoById);
 
         AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_UDP,
                 ALPROTO_ENIP, STREAM_TOSERVER | STREAM_TOCLIENT);
+        AppLayerParserRegisterDetectFlagsFuncs(IPPROTO_UDP, ALPROTO_ENIP,
+                ENIPGetTxDetectFlags, ENIPSetTxDetectFlags);
 
     } else
     {
@@ -510,10 +536,9 @@ void RegisterENIPTCPParsers(void)
                 ENIPStateAlloc, ENIPStateFree);
 
         AppLayerParserRegisterGetEventsFunc(IPPROTO_TCP, ALPROTO_ENIP, ENIPGetEvents);
-        AppLayerParserRegisterHasEventsFunc(IPPROTO_TCP, ALPROTO_ENIP, ENIPHasEvents);
 
-        AppLayerParserRegisterDetectStateFuncs(IPPROTO_TCP, ALPROTO_ENIP, NULL,
-                                                       ENIPGetTxDetectState, ENIPSetTxDetectState);
+        AppLayerParserRegisterDetectStateFuncs(IPPROTO_TCP, ALPROTO_ENIP,
+                ENIPGetTxDetectState, ENIPSetTxDetectState);
 
         AppLayerParserRegisterGetTx(IPPROTO_TCP, ALPROTO_ENIP, ENIPGetTx);
         AppLayerParserRegisterGetTxCnt(IPPROTO_TCP, ALPROTO_ENIP, ENIPGetTxCnt);
@@ -526,6 +551,13 @@ void RegisterENIPTCPParsers(void)
 
         AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_TCP,
                 ALPROTO_ENIP, STREAM_TOSERVER | STREAM_TOCLIENT);
+
+        /* This parser accepts gaps. */
+        AppLayerParserRegisterOptionFlags(IPPROTO_TCP, ALPROTO_ENIP,
+                APP_LAYER_PARSER_OPT_ACCEPT_GAPS);
+        AppLayerParserRegisterDetectFlagsFuncs(IPPROTO_TCP, ALPROTO_ENIP,
+                ENIPGetTxDetectFlags, ENIPSetTxDetectFlags);
+
     } else
     {
         SCLogConfig("Parser disabled for %s protocol. Protocol detection still on.",

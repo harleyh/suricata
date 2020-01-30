@@ -40,9 +40,12 @@
         (f)->sp = 0; \
         (f)->dp = 0; \
         (f)->proto = 0; \
+        (f)->livedev = NULL; \
+        (f)->vlan_idx = 0; \
         SC_ATOMIC_INIT((f)->flow_state); \
         SC_ATOMIC_INIT((f)->use_cnt); \
         (f)->tenant_id = 0; \
+        (f)->parent_id = 0; \
         (f)->probing_parser_toserver_alproto_masks = 0; \
         (f)->probing_parser_toclient_alproto_masks = 0; \
         (f)->flags = 0; \
@@ -59,7 +62,8 @@
         (f)->alproto_orig = 0; \
         (f)->alproto_expect = 0; \
         (f)->de_ctx_version = 0; \
-        (f)->thread_id = 0; \
+        (f)->thread_id[0] = 0; \
+        (f)->thread_id[1] = 0; \
         (f)->alparser = NULL; \
         (f)->alstate = NULL; \
         (f)->sgh_toserver = NULL; \
@@ -82,9 +86,12 @@
         (f)->sp = 0; \
         (f)->dp = 0; \
         (f)->proto = 0; \
+        (f)->livedev = NULL; \
+        (f)->vlan_idx = 0; \
         SC_ATOMIC_RESET((f)->flow_state); \
         SC_ATOMIC_RESET((f)->use_cnt); \
         (f)->tenant_id = 0; \
+        (f)->parent_id = 0; \
         (f)->probing_parser_toserver_alproto_masks = 0; \
         (f)->probing_parser_toclient_alproto_masks = 0; \
         (f)->flags = 0; \
@@ -102,7 +109,8 @@
         (f)->alproto_orig = 0; \
         (f)->alproto_expect = 0; \
         (f)->de_ctx_version = 0; \
-        (f)->thread_id = 0; \
+        (f)->thread_id[0] = 0; \
+        (f)->thread_id[1] = 0; \
         (f)->sgh_toserver = NULL; \
         (f)->sgh_toclient = NULL; \
         GenericVarFree((f)->flowvar); \
@@ -127,7 +135,7 @@
  *  \retval 0 no fit
  */
 #define FLOW_CHECK_MEMCAP(size) \
-    ((((uint64_t)SC_ATOMIC_GET(flow_memuse) + (uint64_t)(size)) <= flow_config.memcap))
+    ((((uint64_t)SC_ATOMIC_GET(flow_memuse) + (uint64_t)(size)) <= SC_ATOMIC_GET(flow_config.memcap)))
 
 Flow *FlowAlloc(void);
 Flow *FlowAllocDirect(void);

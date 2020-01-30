@@ -54,6 +54,7 @@
 #include "util-unittest-helper.h"
 #include "util-print.h"
 #include "util-profiling.h"
+#include "util-validate.h"
 
 #ifdef OS_WIN32
 #include <winsock.h>
@@ -211,11 +212,11 @@ static int IPOnlyCIDRItemParseSingle(IPOnlyCIDRItem *dd, const char *str)
             tmp_ip2[0] = in.s_addr;
 
             /* a > b is illegal, a = b is ok */
-            if (ntohl(tmp_ip[0]) > ntohl(tmp_ip2[0]))
+            if (SCNtohl(tmp_ip[0]) > SCNtohl(tmp_ip2[0]))
                 goto error;
 
-            first = ntohl(tmp_ip[0]);
-            last = ntohl(tmp_ip2[0]);
+            first = SCNtohl(tmp_ip[0]);
+            last = SCNtohl(tmp_ip2[0]);
 
             dd->netmask = 32;
             dd->ip[0] =htonl(first);
@@ -300,7 +301,7 @@ static int IPOnlyCIDRItemSetup(IPOnlyCIDRItem *gh, char *s)
     /* parse the address */
     if (IPOnlyCIDRItemParseSingle(gh, s) == -1) {
         SCLogError(SC_ERR_ADDRESS_ENGINE_GENERIC,
-                   "DetectAddressParse error \"%s\"", s);
+                   "address parsing error \"%s\"", s);
         goto error;
     }
 
@@ -458,8 +459,8 @@ static void IPOnlyCIDRListPrint(IPOnlyCIDRItem *tmphead)
 
     while (tmphead != NULL) {
         i++;
-        SCLogDebug("Item %"PRIu32" has netmask %"PRIu16" negated:"
-                   " %s; IP: %s; signum: %"PRIu16, i, tmphead->netmask,
+        SCLogDebug("Item %"PRIu32" has netmask %"PRIu8" negated:"
+                   " %s; IP: %s; signum: %"PRIu32, i, tmphead->netmask,
                    (tmphead->negated) ? "yes":"no",
                    inet_ntoa(*(struct in_addr*)&tmphead->ip[0]),
                    tmphead->signum);
@@ -767,7 +768,7 @@ static int IPOnlyCIDRListParse(const DetectEngineCtx *de_ctx,
 
     *gh = IPOnlyCIDRListParse2(de_ctx, str, 0);
     if (*gh == NULL) {
-        SCLogDebug("DetectAddressParse2 returned null");
+        SCLogDebug("IPOnlyCIDRListParse2 returned null");
         goto error;
     }
 
@@ -949,9 +950,9 @@ int IPOnlyMatchCompatSMs(ThreadVars *tv,
     SigMatchData *smd = s->sm_arrays[DETECT_SM_LIST_MATCH];
     if (smd) {
         while (1) {
-            BUG_ON(!(sigmatch_table[smd->type].flags & SIGMATCH_IPONLY_COMPAT));
+            DEBUG_VALIDATE_BUG_ON(!(sigmatch_table[smd->type].flags & SIGMATCH_IPONLY_COMPAT));
             KEYWORD_PROFILING_START;
-            if (sigmatch_table[smd->type].Match(tv, det_ctx, p, s, smd->ctx) > 0) {
+            if (sigmatch_table[smd->type].Match(det_ctx, p, s, smd->ctx) > 0) {
                 KEYWORD_PROFILING_END(det_ctx, smd->type, 1);
                 if (smd->is_last)
                     break;
@@ -974,14 +975,16 @@ int IPOnlyMatchCompatSMs(ThreadVars *tv,
  * \param p Pointer to the Packet to match against
  */
 void IPOnlyMatchPacket(ThreadVars *tv,
-                       DetectEngineCtx *de_ctx,
+                       const DetectEngineCtx *de_ctx,
                        DetectEngineThreadCtx *det_ctx,
-                       DetectEngineIPOnlyCtx *io_ctx,
+                       const DetectEngineIPOnlyCtx *io_ctx,
                        DetectEngineIPOnlyThreadCtx *io_tctx, Packet *p)
 {
     SigNumArray *src = NULL;
     SigNumArray *dst = NULL;
     void *user_data_src = NULL, *user_data_dst = NULL;
+
+    SCEnter();
 
     if (p->src.family == AF_INET) {
         (void)SCRadixFindKeyIPV4BestMatch((uint8_t *)&GET_IPV4_SRC_ADDR_U32(p),
@@ -1003,7 +1006,7 @@ void IPOnlyMatchPacket(ThreadVars *tv,
     dst = user_data_dst;
 
     if (src == NULL || dst == NULL)
-        return;
+        SCReturn;
 
     uint32_t u;
     for (u = 0; u < src->size; u++) {
@@ -1069,7 +1072,7 @@ void IPOnlyMatchPacket(ThreadVars *tv,
                         continue;
                     }
 
-                    SCLogDebug("Signum %"PRIu16" match (sid: %"PRIu16", msg: %s)",
+                    SCLogDebug("Signum %"PRIu32" match (sid: %"PRIu32", msg: %s)",
                                u * 8 + i, s->id, s->msg);
 
                     if (s->sm_arrays[DETECT_SM_LIST_POSTMATCH] != NULL) {
@@ -1081,7 +1084,7 @@ void IPOnlyMatchPacket(ThreadVars *tv,
                         if (smd != NULL) {
                             while (1) {
                                 KEYWORD_PROFILING_START;
-                                (void)sigmatch_table[smd->type].Match(tv, det_ctx, p, s, smd->ctx);
+                                (void)sigmatch_table[smd->type].Match(det_ctx, p, s, smd->ctx);
                                 KEYWORD_PROFILING_END(det_ctx, smd->type, 1);
                                 if (smd->is_last)
                                     break;
@@ -1102,6 +1105,7 @@ void IPOnlyMatchPacket(ThreadVars *tv,
             }
         }
     }
+    SCReturn;
 }
 
 /**
@@ -1324,8 +1328,8 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
         if (dst->family == AF_INET) {
 
             SCLogDebug("To IPv4");
-            SCLogDebug("Item has netmask %"PRIu16" negated: %s; IP: %s; signum:"
-                       " %"PRIu16"", dst->netmask, (dst->negated)?"yes":"no",
+            SCLogDebug("Item has netmask %"PRIu8" negated: %s; IP: %s; signum:"
+                       " %"PRIu32"", dst->netmask, (dst->negated)?"yes":"no",
                        inet_ntoa(*(struct in_addr*)&dst->ip[0]), dst->signum);
 
             void *user_data = NULL;

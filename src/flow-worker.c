@@ -39,6 +39,7 @@
 #include "app-layer.h"
 #include "detect-engine.h"
 #include "output.h"
+#include "app-layer-parser.h"
 
 #include "util-validate.h"
 
@@ -58,6 +59,11 @@ typedef struct FlowWorkerThreadData_ {
 
     void *output_thread; /* Output thread data. */
 
+    uint16_t local_bypass_pkts;
+    uint16_t local_bypass_bytes;
+    uint16_t both_bypass_pkts;
+    uint16_t both_bypass_bytes;
+
     PacketQueue pq;
 
 } FlowWorkerThreadData;
@@ -66,14 +72,21 @@ typedef struct FlowWorkerThreadData_ {
  *
  *  Handle flow creation/lookup
  */
-static inline TmEcode FlowUpdate(Packet *p)
+static inline TmEcode FlowUpdate(ThreadVars *tv, FlowWorkerThreadData *fw, Packet *p)
 {
     FlowHandlePacketUpdate(p->flow, p);
 
     int state = SC_ATOMIC_GET(p->flow->flow_state);
     switch (state) {
+#ifdef CAPTURE_OFFLOAD
         case FLOW_STATE_CAPTURE_BYPASSED:
+            StatsAddUI64(tv, fw->both_bypass_pkts, 1);
+            StatsAddUI64(tv, fw->both_bypass_bytes, GET_PKT_LEN(p));
+            return TM_ECODE_DONE;
+#endif
         case FLOW_STATE_LOCAL_BYPASSED:
+            StatsAddUI64(tv, fw->local_bypass_pkts, 1);
+            StatsAddUI64(tv, fw->local_bypass_bytes, GET_PKT_LEN(p));
             return TM_ECODE_DONE;
         default:
             return TM_ECODE_OK;
@@ -90,6 +103,11 @@ static TmEcode FlowWorkerThreadInit(ThreadVars *tv, const void *initdata, void *
 
     SC_ATOMIC_INIT(fw->detect_thread);
     SC_ATOMIC_SET(fw->detect_thread, NULL);
+
+    fw->local_bypass_pkts = StatsRegisterCounter("flow_bypassed.local_pkts", tv);
+    fw->local_bypass_bytes = StatsRegisterCounter("flow_bypassed.local_bytes", tv);
+    fw->both_bypass_pkts = StatsRegisterCounter("flow_bypassed.local_capture_pkts", tv);
+    fw->both_bypass_bytes = StatsRegisterCounter("flow_bypassed.local_capture_bytes", tv);
 
     fw->dtv = DecodeThreadVarsAlloc(tv);
     if (fw->dtv == NULL) {
@@ -161,6 +179,18 @@ static TmEcode FlowWorkerThreadDeinit(ThreadVars *tv, void *data)
 TmEcode Detect(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq);
 TmEcode StreamTcp (ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 
+static void FlowPruneFiles(Packet *p)
+{
+    if (p->flow && p->flow->alstate) {
+        Flow *f = p->flow;
+        FileContainer *fc = AppLayerParserGetFiles(p->proto, f->alproto,
+            f->alstate, PKT_IS_TOSERVER(p) ? STREAM_TOSERVER : STREAM_TOCLIENT);
+        if (fc != NULL) {
+            FilePrune(fc);
+        }
+    }
+}
+
 static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *preq, PacketQueue *unused)
 {
     FlowWorkerThreadData *fw = data;
@@ -180,7 +210,7 @@ static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *pr
         FlowHandlePacket(tv, fw->dtv, p);
         if (likely(p->flow != NULL)) {
             DEBUG_ASSERT_FLOW_LOCKED(p->flow);
-            if (FlowUpdate(p) == TM_ECODE_DONE) {
+            if (FlowUpdate(tv, fw, p) == TM_ECODE_DONE) {
                 FLOWLOCK_UNLOCK(p->flow);
                 return TM_ECODE_OK;
             }
@@ -248,6 +278,8 @@ static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *pr
         FLOWWORKER_PROFILING_END(p, PROFILE_FLOWWORKER_APPLAYERUDP);
     }
 
+    PacketUpdateEngineEventCounters(tv, fw->dtv, p);
+
     /* handle Detect */
     DEBUG_ASSERT_FLOW_LOCKED(p->flow);
     SCLogDebug("packet %"PRIu64" calling Detect", p->pcap_cnt);
@@ -261,6 +293,9 @@ static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *pr
     // Outputs.
     OutputLoggerLog(tv, p, fw->output_thread);
 
+    /* Prune any stored files. */
+    FlowPruneFiles(p);
+
     /*  Release tcp segments. Done here after alerting can use them. */
     if (p->flow != NULL && p->proto == IPPROTO_TCP) {
         FLOWWORKER_PROFILING_START(p, PROFILE_FLOWWORKER_TCPPRUNE);
@@ -271,6 +306,9 @@ static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *pr
 
     if (p->flow) {
         DEBUG_ASSERT_FLOW_LOCKED(p->flow);
+
+        /* run tx cleanup last */
+        AppLayerParserTransactionsCleanup(p->flow);
         FLOWLOCK_UNLOCK(p->flow);
     }
 

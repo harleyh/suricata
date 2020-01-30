@@ -16,22 +16,50 @@
 
    Test configuration.
 
+.. _cmdline-option-v:
+
 .. option:: -v
 
-   The -v option enables more verbosity of Suricata's output. Supply
-   multiple times for more verbosity.
+   Increase the verbosity of the Suricata application logging by
+   increasing the log level from the default. This option can be
+   passed multiple times to further increase the verbosity.
+
+   - -v: INFO
+   - -vv: PERF
+   - -vvv: CONFIG
+   - -vvvv: DEBUG
+
+   This option will not decrease the log level set in the
+   configuration file if it is already more verbose than the level
+   requested with this option.
 
 .. Basic input options.
 
 .. option:: -r <path>
 
-   Run in pcap offline mode reading files from pcap file.
+   Run in pcap offline mode (replay mode) reading files from pcap file. If
+   <path> specifies a directory, all files in that directory will be processed
+   in order of modified time maintaining flow state between files.
+
+.. option:: --pcap-file-continuous
+
+   Used with the -r option to indicate that the mode should stay alive until
+   interrupted. This is useful with directories to add new files and not reset
+   flow state between files.
+
+.. option:: --pcap-file-delete
+
+   Used with the -r option to indicate that the mode should delete pcap files
+   after they have been processed. This is useful with pcap-file-continuous to
+   continuously feed files to a directory and have them cleaned up when done. If
+   this option is not set, pcap files will not be deleted after processing.
 
 .. option::  -i <interface>
 
    After the -i option you can enter the interface card you would like
    to use to sniff packets from.  This option will try to use the best
-   capture method available.
+   capture method available. Can be used several times to sniff packets from
+   several interfaces.
 
 .. option:: --pcap[=<device>]
 
@@ -74,7 +102,7 @@
 
    Normally if you run Suricata on your console, it keeps your console
    occupied. You can not use it for other purposes, and when you close
-   the window, Suricata stops running.  If you run Suricata as deamon
+   the window, Suricata stops running.  If you run Suricata as daemon
    (using the -D option), it runs at the background and you will be
    able to use the console for other tasks without disturbing the
    engine running.
@@ -207,10 +235,6 @@
 .. option:: --napatech
 
    Enable packet capture using the Napatech Streams API.
-
-.. option:: --mpipe
-
-   Enable packet capture using the TileGX mpipe interface.
 
 .. option:: --erf-in=<file>
 

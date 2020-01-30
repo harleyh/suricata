@@ -46,13 +46,13 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectICodeMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+static int DetectICodeMatch(DetectEngineThreadCtx *, Packet *,
         const Signature *, const SigMatchCtx *);
 static int DetectICodeSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectICodeRegisterTests(void);
 void DetectICodeFree(void *);
 
-static int PrefilterSetupICode(SigGroupHead *sgh);
+static int PrefilterSetupICode(DetectEngineCtx *de_ctx, SigGroupHead *sgh);
 static _Bool PrefilterICodeIsPrefilterable(const Signature *s);
 
 /**
@@ -116,7 +116,7 @@ static inline int ICodeMatch(const uint8_t pcode, const uint8_t mode,
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectICodeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+static int DetectICodeMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
         const Signature *s, const SigMatchCtx *ctx)
 {
     if (PKT_IS_PSEUDOPKT(p))
@@ -331,9 +331,9 @@ PrefilterPacketICodeCompare(PrefilterPacketHeaderValue v, void *smctx)
     return FALSE;
 }
 
-static int PrefilterSetupICode(SigGroupHead *sgh)
+static int PrefilterSetupICode(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeaderU8Hash(sgh, DETECT_ICODE,
+    return PrefilterSetupPacketHeaderU8Hash(de_ctx, sgh, DETECT_ICODE,
             PrefilterPacketICodeSet,
             PrefilterPacketICodeCompare,
             PrefilterPacketICodeMatch);

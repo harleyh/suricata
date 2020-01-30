@@ -46,13 +46,13 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectITypeMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+static int DetectITypeMatch(DetectEngineThreadCtx *, Packet *,
         const Signature *, const SigMatchCtx *);
 static int DetectITypeSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectITypeRegisterTests(void);
 void DetectITypeFree(void *);
 
-static int PrefilterSetupIType(SigGroupHead *sgh);
+static int PrefilterSetupIType(DetectEngineCtx *de_ctx, SigGroupHead *sgh);
 static _Bool PrefilterITypeIsPrefilterable(const Signature *s);
 
 /**
@@ -61,7 +61,7 @@ static _Bool PrefilterITypeIsPrefilterable(const Signature *s);
 void DetectITypeRegister (void)
 {
     sigmatch_table[DETECT_ITYPE].name = "itype";
-    sigmatch_table[DETECT_ITYPE].desc = "matching on a specific ICMP type";
+    sigmatch_table[DETECT_ITYPE].desc = "match on a specific ICMP type";
     sigmatch_table[DETECT_ITYPE].url = DOC_URL DOC_VERSION "/rules/header-keywords.html#itype";
     sigmatch_table[DETECT_ITYPE].Match = DetectITypeMatch;
     sigmatch_table[DETECT_ITYPE].Setup = DetectITypeSetup;
@@ -116,7 +116,7 @@ static inline int ITypeMatch(const uint8_t ptype, const uint8_t mode,
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectITypeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+static int DetectITypeMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
         const Signature *s, const SigMatchCtx *ctx)
 {
     if (PKT_IS_PSEUDOPKT(p))
@@ -335,9 +335,9 @@ PrefilterPacketITypeCompare(PrefilterPacketHeaderValue v, void *smctx)
     return FALSE;
 }
 
-static int PrefilterSetupIType(SigGroupHead *sgh)
+static int PrefilterSetupIType(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeaderU8Hash(sgh, DETECT_ITYPE,
+    return PrefilterSetupPacketHeaderU8Hash(de_ctx, sgh, DETECT_ITYPE,
             PrefilterPacketITypeSet,
             PrefilterPacketITypeCompare,
             PrefilterPacketITypeMatch);

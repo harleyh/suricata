@@ -45,6 +45,10 @@
 #define CLS 64
 #endif
 
+#if HAVE_DIRENT_H
+#include <dirent.h>
+#endif
+
 #if HAVE_STDIO_H
 #include <stdio.h>
 #endif
@@ -168,6 +172,10 @@
 #include <sys/mman.h>
 #endif
 
+#if HAVE_SYS_RANDOM_H
+#include <sys/random.h>
+#endif
+
 #if HAVE_NETINET_IN_H
 #include <netinet/in.h>
 #endif
@@ -180,6 +188,7 @@
 #include <netdb.h>
 #endif
 
+#ifndef SC_PCAP_DONT_INCLUDE_PCAP_H
 #ifdef HAVE_PCAP_H
 #include <pcap.h>
 #endif
@@ -187,9 +196,14 @@
 #ifdef HAVE_PCAP_PCAP_H
 #include <pcap/pcap.h>
 #endif
+#endif
 
-#ifdef HAVE_PCAP_BPF_H
-#include <pcap/bpf.h>
+#ifdef HAVE_UTIME_H
+#include <utime.h>
+#endif
+
+#ifdef HAVE_LIBGEN_H
+#include <libgen.h>
 #endif
 
 #if __CYGWIN__
@@ -197,6 +211,15 @@
 #define _X86_
 #endif
 #endif
+
+#if !__CYGWIN__
+#ifdef HAVE_WINSOCK2_H
+#include <winsock2.h>
+#endif
+#ifdef HAVE_WS2TCPIP_H
+#include <ws2tcpip.h>
+#endif
+#endif /* !__CYGWIN__ */
 
 #ifdef HAVE_WINDOWS_H
 #ifndef _WIN32_WINNT
@@ -213,16 +236,6 @@
 #include <w32api/wtypes.h>
 #endif
 
-#if !__CYGWIN__
-#ifdef HAVE_WINSOCK2_H
-#include <winsock2.h>
-#endif
-#ifdef HAVE_WS2TCPIP_H
-#include <ws2tcpip.h>
-#endif
-#endif /* !__CYGWIN__ */
-
-#ifdef HAVE_LIBJANSSON
 #include <jansson.h>
 #ifndef JSON_ESCAPE_SLASH
 #define JSON_ESCAPE_SLASH 0
@@ -231,7 +244,6 @@
 #ifndef json_boolean
 #define json_boolean(val)      SCJsonBool((val))
 //#define json_boolean(val)      ((val) ? json_true() : json_false())
-#endif
 #endif
 
 #ifdef HAVE_MAGIC
@@ -359,13 +371,34 @@
 
 #define WARN_UNUSED __attribute__((warn_unused_result))
 
+#define SCNtohl(x) (uint32_t)ntohl((x))
+#define SCNtohs(x) (uint16_t)ntohs((x))
+
+/* swap flags if one of them is set, otherwise do nothing. */
+#define SWAP_FLAGS(flags, a, b)                     \
+    do {                                            \
+        if (((flags) & ((a)|(b))) == (a)) {         \
+            (flags) &= ~(a);                        \
+            (flags) |= (b);                         \
+        } else if (((flags) & ((a)|(b))) == (b)) {  \
+            (flags) &= ~(b);                        \
+            (flags) |= (a);                         \
+        }                                           \
+    } while(0)
+
+#define SWAP_VARS(type, a, b)           \
+    do {                                \
+        type t = (a);                   \
+        (a) = (b);                      \
+        (b) = t;                        \
+    } while (0)
+
 typedef enum PacketProfileDetectId_ {
+    PROF_DETECT_SETUP,
+    PROF_DETECT_GETSGH,
     PROF_DETECT_IPONLY,
     PROF_DETECT_RULES,
-    PROF_DETECT_STATEFUL_START,
-    PROF_DETECT_STATEFUL_CONT,
-    PROF_DETECT_STATEFUL_UPDATE,
-    PROF_DETECT_PREFILTER,
+    PROF_DETECT_TX,
     PROF_DETECT_PF_PKT,
     PROF_DETECT_PF_PAYLOAD,
     PROF_DETECT_PF_TX,
@@ -373,34 +406,51 @@ typedef enum PacketProfileDetectId_ {
     PROF_DETECT_PF_SORT2,
     PROF_DETECT_NONMPMLIST,
     PROF_DETECT_ALERT,
+    PROF_DETECT_TX_UPDATE,
     PROF_DETECT_CLEANUP,
-    PROF_DETECT_GETSGH,
-    PROF_DETECT_MPM_FD_SMTP,
 
     PROF_DETECT_SIZE,
 } PacketProfileDetectId;
 
+/** \note update PacketProfileLoggertIdToString if you change anything here */
 typedef enum {
     LOGGER_UNDEFINED,
+
+    /* TX loggers first for low logger IDs */
+    LOGGER_DNS_TS,
+    LOGGER_DNS_TC,
+    LOGGER_HTTP,
+    LOGGER_TLS_STORE,
+    LOGGER_TLS,
+    LOGGER_JSON_DNS_TS,
+    LOGGER_JSON_DNS_TC,
+    LOGGER_JSON_HTTP,
+    LOGGER_JSON_SMTP,
+    LOGGER_JSON_TLS,
+    LOGGER_JSON_NFS,
+    LOGGER_JSON_TFTP,
+    LOGGER_JSON_FTP,
+    LOGGER_JSON_DNP3_TS,
+    LOGGER_JSON_DNP3_TC,
+    LOGGER_JSON_SSH,
+    LOGGER_JSON_SMB,
+    LOGGER_JSON_IKEV2,
+    LOGGER_JSON_KRB5,
+    LOGGER_JSON_DHCP,
+    LOGGER_JSON_SNMP,
+    LOGGER_JSON_SIP,
+    LOGGER_JSON_TEMPLATE_RUST,
+    LOGGER_JSON_TEMPLATE,
+    LOGGER_JSON_RDP,
+
     LOGGER_ALERT_DEBUG,
     LOGGER_ALERT_FAST,
     LOGGER_UNIFIED2,
     LOGGER_ALERT_SYSLOG,
     LOGGER_DROP,
     LOGGER_JSON_ALERT,
+    LOGGER_JSON_ANOMALY,
     LOGGER_JSON_DROP,
-    LOGGER_JSON_SSH,
-    LOGGER_DNS,
-    LOGGER_HTTP,
-    LOGGER_JSON_DNS,
-    LOGGER_JSON_HTTP,
-    LOGGER_JSON_SMTP,
-    LOGGER_JSON_TLS,
-    LOGGER_JSON_NFS,
-    LOGGER_JSON_TEMPLATE,
-    LOGGER_TLS_STORE,
-    LOGGER_TLS,
-    LOGGER_FILE,
     LOGGER_FILE_STORE,
     LOGGER_JSON_FILE,
     LOGGER_TCP_DATA,
@@ -410,11 +460,11 @@ typedef enum {
     LOGGER_JSON_STATS,
     LOGGER_PRELUDE,
     LOGGER_PCAP,
-    LOGGER_JSON_DNP3,
-    LOGGER_JSON_VARS,
+    LOGGER_JSON_METADATA,
     LOGGER_SIZE,
 } LoggerId;
 
+#include "util-optimize.h"
 #include <htp/htp.h>
 #include "threads.h"
 #include "tm-threads-common.h"
@@ -422,7 +472,6 @@ typedef enum {
 #include "util-error.h"
 #include "util-mem.h"
 #include "detect-engine-alert.h"
-#include "util-optimize.h"
 #include "util-path.h"
 #include "util-conf.h"
 
@@ -430,6 +479,10 @@ typedef enum {
 #include <lua.h>
 #include <lualib.h>
 #include <lauxlib.h>
+#else
+/* If we don't have Lua, create a typedef for lua_State so the
+ * exported Lua functions don't fail the build. */
+typedef void lua_State;
 #endif
 
 #ifndef HAVE_STRLCAT
@@ -438,9 +491,15 @@ size_t strlcat(char *, const char *src, size_t siz);
 #ifndef HAVE_STRLCPY
 size_t strlcpy(char *dst, const char *src, size_t siz);
 #endif
+#ifndef HAVE_STRPTIME
+char *strptime(const char * __restrict, const char * __restrict, struct tm * __restrict);
+#endif
 
 extern int coverage_unittests;
 extern int g_ut_modules;
 extern int g_ut_covered;
+
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
+
 #endif /* __SURICATA_COMMON_H__ */
 

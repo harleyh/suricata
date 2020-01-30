@@ -30,9 +30,9 @@
 #define JSON_STATS_THREADS (1<<1)
 #define JSON_STATS_DELTAS  (1<<2)
 
-#ifdef HAVE_LIBJANSSON
 json_t *StatsToJSON(const StatsTable *st, uint8_t flags);
-#endif
+TmEcode OutputEngineStatsReloadTime(json_t **jdata);
+TmEcode OutputEngineStatsRuleset(json_t **jdata);
 void JsonStatsLogRegister(void);
 
 #endif /* __OUTPUT_JSON_COUNTERS_H__ */

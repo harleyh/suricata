@@ -15,12 +15,11 @@
  * 02110-1301, USA.
  */
 
-extern crate libc;
 use std::ptr;
-use libc::{c_void};
+use std::os::raw::{c_void};
 
-use log::*;
-use core::*;
+use crate::log::*;
+use crate::core::*;
 
 pub struct File;
 #[repr(C)]
@@ -49,16 +48,11 @@ impl FileContainer {
             None => panic!("BUG no suricata_config"),
             Some(c) => {
                 SCLogDebug!("FILE {:p} OPEN flags {:04X}", &self, flags);
-                //let ref res =
 
-                (c.FileOpenFile)(&self, cfg.files_sbcfg, *track_id,
+                let res = (c.FileOpenFile)(&self, cfg.files_sbcfg, *track_id,
                         name.as_ptr(), name.len() as u16,
                         ptr::null(), 0u32, flags);
-
-                //if !res {
-                //    panic!("c.fn_fileopenfile failed");
-                //}
-                0
+                res
             }
         }
     }
@@ -85,9 +79,6 @@ impl FileContainer {
                         r
                     },
                 };
-                if res != 0 {
-                    panic!("c.fn_fileappenddata failed");
-                }
                 res
             }
         }
@@ -100,9 +91,6 @@ impl FileContainer {
             None => panic!("BUG no suricata_config"),
             Some(c) => {
                 let res = (c.FileCloseFile)(&self, *track_id, ptr::null(), 0u32, flags);
-                if res != 0 {
-                    panic!("c.fn_fileclosefile failed");
-                }
                 res
             }
         }

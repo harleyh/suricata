@@ -28,6 +28,7 @@
 #include "app-layer-htp.h"
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
+#include "util-misc.h"
 
 #include "detect.h"
 #include "detect-parse.h"
@@ -43,13 +44,13 @@
 /**
  * \brief Regex for parsing our filesize
  */
-#define PARSE_REGEX  "^(?:\\s*)(<|>)?(?:\\s*)([0-9]{1,23})(?:\\s*)(?:(<>)(?:\\s*)([0-9]{1,23}))?\\s*$"
+#define PARSE_REGEX  "^(?:\\s*)(<|>)?(?:\\s*)([0-9]{1,23}[a-zA-Z]{0,2})(?:\\s*)(?:(<>)(?:\\s*)([0-9]{1,23}[a-zA-Z]{0,2}))?\\s*$"
 
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 /*prototypes*/
-static int DetectFilesizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
+static int DetectFilesizeMatch (DetectEngineThreadCtx *det_ctx, Flow *f,
         uint8_t flags, File *file, const Signature *s, const SigMatchCtx *m);
 static int DetectFilesizeSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectFilesizeFree (void *);
@@ -89,7 +90,7 @@ void DetectFilesizeRegister(void)
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectFilesizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
+static int DetectFilesizeMatch (DetectEngineThreadCtx *det_ctx, Flow *f,
         uint8_t flags, File *file, const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
@@ -214,8 +215,8 @@ static DetectFilesizeData *DetectFilesizeParse (const char *str)
     }
 
     /** set the first value */
-    if (ByteExtractStringUint64(&fsd->size1,10,strlen(arg2),arg2) <= 0){
-        SCLogError(SC_ERR_INVALID_ARGUMENT,"Invalid size :\"%s\"",arg2);
+    if (ParseSizeStringU64(arg2, &fsd->size1) < 0) {
+        SCLogError(SC_ERR_SIZE_PARSE, "Error parsing filesize value - %s", arg2);
         goto error;
     }
 
@@ -227,9 +228,8 @@ static DetectFilesizeData *DetectFilesizeParse (const char *str)
             goto error;
         }
 
-        if(ByteExtractStringUint64(&fsd->size2,10,strlen(arg4),arg4) <= 0)
-        {
-            SCLogError(SC_ERR_INVALID_ARGUMENT,"Invalid size :\"%s\"",arg4);
+        if (ParseSizeStringU64(arg4, &fsd->size2) < 0) {
+            SCLogError(SC_ERR_SIZE_PARSE, "Error parsing filesize value - %s", arg4);
             goto error;
         }
 

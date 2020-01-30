@@ -42,7 +42,7 @@
 /* delimiters for functions/arguments */
 const char *ASN_DELIM = " \t,\n";
 
-static int DetectAsn1Match(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+static int DetectAsn1Match(DetectEngineThreadCtx *, Packet *,
                      const Signature *, const SigMatchCtx *);
 static int DetectAsn1Setup (DetectEngineCtx *, Signature *, const char *);
 static void DetectAsn1RegisterTests(void);
@@ -137,7 +137,7 @@ static uint8_t DetectAsn1Checks(Asn1Node *node, const DetectAsn1Data *ad)
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectAsn1Match(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+static int DetectAsn1Match(DetectEngineThreadCtx *det_ctx, Packet *p,
                     const Signature *s, const SigMatchCtx *ctx)
 {
     uint8_t ret = 0;
@@ -148,21 +148,23 @@ static int DetectAsn1Match(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet
     }
 
     const DetectAsn1Data *ad = (const DetectAsn1Data *)ctx;
+    int32_t offset;
+    if (ad->flags & ASN1_ABSOLUTE_OFFSET) {
+        offset = ad->absolute_offset;
+    } else if (ad->flags & ASN1_RELATIVE_OFFSET) {
+        offset = ad->relative_offset;
+    } else {
+        offset = 0;
+    }
+    if (offset >= (int32_t)p->payload_len) {
+        return 0;
+    }
 
     Asn1Ctx *ac = SCAsn1CtxNew();
     if (ac == NULL)
         return 0;
 
-    if (ad->flags & ASN1_ABSOLUTE_OFFSET) {
-        SCAsn1CtxInit(ac, p->payload + ad->absolute_offset,
-                      p->payload_len - ad->absolute_offset);
-    } else if (ad->flags & ASN1_RELATIVE_OFFSET) {
-        SCAsn1CtxInit(ac, p->payload + ad->relative_offset,
-                      p->payload_len - ad->relative_offset);
-    } else {
-        SCAsn1CtxInit(ac, p->payload, p->payload_len);
-    }
-
+    SCAsn1CtxInit(ac, p->payload + offset, p->payload_len - offset);
     SCAsn1Decode(ac, ac->cur_frame);
 
     /* Ok, now we have all the data. Let's check the nodes */
@@ -262,14 +264,14 @@ static DetectAsn1Data *DetectAsn1Parse(const char *instr)
         } else {
             SCLogError(SC_ERR_INVALID_VALUE, "Malformed asn1 argument: %s",
                        asn1str);
-            return NULL;
+            goto error;
         }
         tok = strtok_r(NULL, ASN_DELIM, &saveptr);
     }
 
     fd = SCMalloc(sizeof(DetectAsn1Data));
     if (unlikely(fd == NULL)) {
-        exit(EXIT_FAILURE);
+        goto error;
     }
     memset(fd, 0x00, sizeof(DetectAsn1Data));
 

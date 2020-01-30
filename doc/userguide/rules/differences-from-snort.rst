@@ -2,18 +2,11 @@
 Differences From Snort
 ======================
 
-Overview
---------
 This document is intended to highlight the major differences between Suricata
 and Snort that apply to rules and rule writing.
 
 Where not specified, the statements below apply to Suricata.  In general,
 references to Snort refer to the version 2.9 branch.
-
-Contents
---------
-
-.. contents::
 
 Automatic Protocol Detection
 ----------------------------
@@ -28,7 +21,6 @@ Automatic Protocol Detection
    -  imap (detection only by default; no parsing)
    -  ftp
    -  modbus (disabled by default; minimalist probe parser; can lead to false positives)
-   -  msn (detection only by default; no parsing)
    -  smb
    -  smb2 (disabled internally inside the engine)
    -  smtp
@@ -339,7 +331,7 @@ Relative PCRE
 
      content:".php?sign="; http_uri; pcre:"/^[a-zA-Z0-9]{8}$/UR";
 
--  With Snort you can't combine the “relative” PCRE option ('R') with other buffer options like normalized URI ('U') – you get a syntax error.
+-  With Snort you can't combine the "relative" PCRE option ('R') with other buffer options like normalized URI ('U') – you get a syntax error.
 
 ``tls*`` Keywords
 ------------------
@@ -392,9 +384,9 @@ IP Reputation and ``iprep`` Keyword
 
 -  :doc:`../reputation/index`
 -  :doc:`../reputation/ipreputation/ip-reputation-config`
--  :doc:`../reputation/ipreputation/ip-reputation-rules`
+-  :doc:`ip-reputation-rules`
 -  :doc:`../reputation/ipreputation/ip-reputation-format`
--  `http://blog.inliniac.net/2012/11/21/ip-reputation-in-suricata/ <http://blog.inliniac.net/2012/11/21/ip-reputation-in-suricata/>`_
+-  `https://blog.inliniac.net/2012/11/21/ip-reputation-in-suricata/ <https://blog.inliniac.net/2012/11/21/ip-reputation-in-suricata/>`_
 
 Flowbits
 --------
@@ -456,7 +448,7 @@ Negated Content Match Special Case
 File Extraction
 ---------------
 
--  Suricata has the ability to match on files from HTTP and SMTP streams and
+-  Suricata has the ability to match on files from FTP, HTTP and SMTP streams and
    log them to disk.
 
 -  Snort has the "file" preprocessor that can do something similar
@@ -489,8 +481,8 @@ File Extraction
 
 -  :doc:`file-keywords`
 -  :doc:`../file-extraction/file-extraction`
--  `http://blog.inliniac.net/2011/11/29/file-extraction-in-suricata/ <http://blog.inliniac.net/2011/11/29/file-extraction-in-suricata/>`_
--  `http://blog.inliniac.net/2014/11/11/smtp-file-extraction-in-suricata/ <http://blog.inliniac.net/2014/11/11/smtp-file-extraction-in-suricata/>`_
+-  `https://blog.inliniac.net/2011/11/29/file-extraction-in-suricata/ <https://blog.inliniac.net/2011/11/29/file-extraction-in-suricata/>`_
+-  `https://blog.inliniac.net/2014/11/11/smtp-file-extraction-in-suricata/ <https://blog.inliniac.net/2014/11/11/smtp-file-extraction-in-suricata/>`_
 
 Lua Scripting
 -------------
@@ -561,7 +553,7 @@ Fast Pattern
    when doing fast pattern matching, something the other algorithims and
    Snort do not do.
 
--  :doc:`fast-pattern`
+-  :ref:`rules-keyword-fast_pattern`
 
 Don't Cross The Streams
 -----------------------

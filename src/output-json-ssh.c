@@ -50,13 +50,11 @@
 #include "output-json.h"
 #include "output-json-ssh.h"
 
-#ifdef HAVE_LIBJANSSON
-
 #define MODULE_NAME "LogSshLog"
 
 typedef struct OutputSshCtx_ {
     LogFileCtx *file_ctx;
-    uint32_t flags; /** Store mode */
+    OutputJsonCommonSettings cfg;
 } OutputSshCtx;
 
 
@@ -71,20 +69,20 @@ void JsonSshLogJSON(json_t *tjs, SshState *ssh_state)
     json_t *cjs = json_object();
     if (cjs != NULL) {
         json_object_set_new(cjs, "proto_version",
-                json_string((char *)ssh_state->cli_hdr.proto_version));
+                SCJsonString((char *)ssh_state->cli_hdr.proto_version));
 
         json_object_set_new(cjs, "software_version",
-                json_string((char *)ssh_state->cli_hdr.software_version));
+                SCJsonString((char *)ssh_state->cli_hdr.software_version));
     }
     json_object_set_new(tjs, "client", cjs);
 
     json_t *sjs = json_object();
     if (sjs != NULL) {
         json_object_set_new(sjs, "proto_version",
-                json_string((char *)ssh_state->srv_hdr.proto_version));
+                SCJsonString((char *)ssh_state->srv_hdr.proto_version));
 
         json_object_set_new(sjs, "software_version",
-                json_string((char *)ssh_state->srv_hdr.software_version));
+                SCJsonString((char *)ssh_state->srv_hdr.software_version));
     }
     json_object_set_new(tjs, "server", sjs);
 
@@ -102,12 +100,14 @@ static int JsonSshLogger(ThreadVars *tv, void *thread_data, const Packet *p,
     }
 
     if (ssh_state->cli_hdr.software_version == NULL ||
-            ssh_state->srv_hdr.software_version == NULL)
+        ssh_state->srv_hdr.software_version == NULL)
         return 0;
 
-    json_t *js = CreateJSONHeader((Packet *)p, 1, "ssh");//TODO
+    json_t *js = CreateJSONHeader(p, LOG_DIR_FLOW, "ssh");
     if (unlikely(js == NULL))
         return 0;
+
+    JsonAddCommonOptions(&ssh_ctx->cfg, p, f, js);
 
     json_t *tjs = json_object();
     if (tjs == NULL) {
@@ -129,7 +129,6 @@ static int JsonSshLogger(ThreadVars *tv, void *thread_data, const Packet *p,
     return 0;
 }
 
-#define OUTPUT_BUFFER_SIZE 65535
 static TmEcode JsonSshLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     JsonSshLogThread *aft = SCMalloc(sizeof(JsonSshLogThread));
@@ -147,7 +146,7 @@ static TmEcode JsonSshLogThreadInit(ThreadVars *t, const void *initdata, void **
     /* Use the Ouptut Context (file pointer and mutex) */
     aft->sshlog_ctx = ((OutputCtx *)initdata)->data;
 
-    aft->buffer = MemBufferCreateNew(OUTPUT_BUFFER_SIZE);
+    aft->buffer = MemBufferCreateNew(JSON_OUTPUT_BUFFER_SIZE);
     if (aft->buffer == NULL) {
         SCFree(aft);
         return TM_ECODE_FAILED;
@@ -182,30 +181,31 @@ static void OutputSshLogDeinit(OutputCtx *output_ctx)
 }
 
 #define DEFAULT_LOG_FILENAME "ssh.json"
-static OutputCtx *OutputSshLogInit(ConfNode *conf)
+static OutputInitResult OutputSshLogInit(ConfNode *conf)
 {
+    OutputInitResult result = { NULL, false };
     LogFileCtx *file_ctx = LogFileNewCtx();
     if(file_ctx == NULL) {
         SCLogError(SC_ERR_SSH_LOG_GENERIC, "couldn't create new file_ctx");
-        return NULL;
+        return result;
     }
 
     if (SCConfLogOpenGeneric(conf, file_ctx, DEFAULT_LOG_FILENAME, 1) < 0) {
         LogFileFreeCtx(file_ctx);
-        return NULL;
+        return result;
     }
 
     OutputSshCtx *ssh_ctx = SCMalloc(sizeof(OutputSshCtx));
     if (unlikely(ssh_ctx == NULL)) {
         LogFileFreeCtx(file_ctx);
-        return NULL;
+        return result;
     }
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
         LogFileFreeCtx(file_ctx);
         SCFree(ssh_ctx);
-        return NULL;
+        return result;
     }
 
     ssh_ctx->file_ctx = file_ctx;
@@ -214,7 +214,10 @@ static OutputCtx *OutputSshLogInit(ConfNode *conf)
     output_ctx->DeInit = OutputSshLogDeinit;
 
     AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_SSH);
-    return output_ctx;
+
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
 static void OutputSshLogDeinitSub(OutputCtx *output_ctx)
@@ -224,27 +227,32 @@ static void OutputSshLogDeinitSub(OutputCtx *output_ctx)
     SCFree(output_ctx);
 }
 
-static OutputCtx *OutputSshLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputInitResult OutputSshLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
+    OutputInitResult result = { NULL, false };
     OutputJsonCtx *ojc = parent_ctx->data;
 
     OutputSshCtx *ssh_ctx = SCMalloc(sizeof(OutputSshCtx));
     if (unlikely(ssh_ctx == NULL))
-        return NULL;
+        return result;
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
         SCFree(ssh_ctx);
-        return NULL;
+        return result;
     }
 
     ssh_ctx->file_ctx = ojc->file_ctx;
+    ssh_ctx->cfg = ojc->cfg;
 
     output_ctx->data = ssh_ctx;
     output_ctx->DeInit = OutputSshLogDeinitSub;
 
     AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_SSH);
-    return output_ctx;
+
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
 void JsonSshLogRegister (void)
@@ -263,11 +271,3 @@ void JsonSshLogRegister (void)
         SSH_STATE_BANNER_DONE, SSH_STATE_BANNER_DONE,
         JsonSshLogThreadInit, JsonSshLogThreadDeinit, NULL);
 }
-
-#else
-
-void JsonSshLogRegister (void)
-{
-}
-
-#endif

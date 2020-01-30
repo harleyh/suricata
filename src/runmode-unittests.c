@@ -36,22 +36,9 @@
 #include "detect-engine-sigorder.h"
 #include "detect-engine-payload.h"
 #include "detect-engine-dcepayload.h"
-#include "detect-engine-uri.h"
-#include "detect-engine-hcbd.h"
-#include "detect-engine-hsbd.h"
-#include "detect-engine-hrhd.h"
-#include "detect-engine-hmd.h"
-#include "detect-engine-hcd.h"
-#include "detect-engine-hrud.h"
-#include "detect-engine-hsmd.h"
-#include "detect-engine-hscd.h"
-#include "detect-engine-hua.h"
-#include "detect-engine-hhhd.h"
-#include "detect-engine-hrhhd.h"
 #include "detect-engine-state.h"
 #include "detect-engine-tag.h"
 #include "detect-engine-modbus.h"
-#include "detect-engine-filedata-smtp.h"
 #include "detect-fast-pattern.h"
 #include "flow.h"
 #include "flow-timeout.h"
@@ -71,7 +58,6 @@
 #include "app-layer-detect-proto.h"
 #include "app-layer-parser.h"
 #include "app-layer.h"
-#include "app-layer-smb.h"
 #include "app-layer-dcerpc.h"
 #include "app-layer-dcerpc-udp.h"
 #include "app-layer-htp.h"
@@ -122,6 +108,19 @@
 #include "util-streaming-buffer.h"
 #include "util-lua.h"
 
+#ifdef OS_WIN32
+#include "win32-syscall.h"
+#endif
+
+#ifdef WINDIVERT
+#include "source-windivert.h"
+#endif
+
+#ifdef HAVE_NSS
+#include <prinit.h>
+#include <nss.h>
+#endif
+
 #endif /* UNITTESTS */
 
 void TmqhSetup (void);
@@ -149,6 +148,7 @@ static void RegisterUnittests(void)
     DecodeEthernetRegisterTests();
     DecodePPPRegisterTests();
     DecodeVLANRegisterTests();
+    DecodeVXLANRegisterTests();
     DecodeRawRegisterTests();
     DecodePPPOERegisterTests();
     DecodeICMPV4RegisterTests();
@@ -180,31 +180,15 @@ static void RegisterUnittests(void)
     SCClassConfRegisterTests();
     SCThresholdConfRegisterTests();
     SCRConfRegisterTests();
-#ifdef __SC_CUDA_SUPPORT__
-    SCCudaRegisterTests();
-#endif
     PayloadRegisterTests();
     DcePayloadRegisterTests();
-    UriRegisterTests();
 #ifdef PROFILING
     SCProfilingRegisterTests();
 #endif
     DeStateRegisterTests();
     MemcmpRegisterTests();
-    DetectEngineHttpClientBodyRegisterTests();
-    DetectEngineHttpServerBodyRegisterTests();
-    DetectEngineHttpRawHeaderRegisterTests();
-    DetectEngineHttpMethodRegisterTests();
-    DetectEngineHttpCookieRegisterTests();
-    DetectEngineHttpRawUriRegisterTests();
-    DetectEngineHttpStatMsgRegisterTests();
-    DetectEngineHttpStatCodeRegisterTests();
-    DetectEngineHttpUARegisterTests();
-    DetectEngineHttpHHRegisterTests();
-    DetectEngineHttpHRHRegisterTests();
     DetectEngineInspectModbusRegisterTests();
     DetectEngineRegisterTests();
-    DetectEngineSMTPFiledataRegisterTests();
     SCLogRegisterTests();
     MagicRegisterTests();
     UtilMiscRegisterTests();
@@ -213,12 +197,15 @@ static void RegisterUnittests(void)
     DetectPortTests();
     SCAtomicRegisterTests();
     MemrchrRegisterTests();
-#ifdef __SC_CUDA_SUPPORT__
-    CudaBufferRegisterUnittests();
-#endif
     AppLayerUnittestsRegister();
     MimeDecRegisterTests();
     StreamingBufferRegisterTests();
+#ifdef OS_WIN32
+    Win32SyscallRegisterTests();
+#endif
+#ifdef WINDIVERT
+    SourceWinDivertRegisterTests();
+#endif
 }
 #endif
 
@@ -246,20 +233,16 @@ void RunUnittests(int list_unittests, const char *regex_arg)
     default_packet_size = DEFAULT_PACKET_SIZE;
     /* load the pattern matchers */
     MpmTableSetup();
-#ifdef __SC_CUDA_SUPPORT__
-    MpmCudaEnvironmentSetup();
-#endif
     SpmTableSetup();
 
+    StorageInit();
     AppLayerSetup();
 
     /* hardcoded initialization code */
     SigTableSetup(); /* load the rule keywords */
     TmqhSetup();
 
-    StorageInit();
     CIDRInit();
-    SigParsePrepare();
 
 #ifdef DBG_MEM_ALLOC
     SCLogInfo("Memory used at startup: %"PRIdMAX, (intmax_t)global_mem);
@@ -283,6 +266,13 @@ void RunUnittests(int list_unittests, const char *regex_arg)
         UtRunSelftest(regex_arg); /* inits and cleans up again */
     }
 
+#ifdef HAVE_NSS
+    /* init NSS for hashing */
+    PR_Init(PR_USER_THREAD, PR_PRIORITY_NORMAL, 0);
+    NSS_NoDB_Init(NULL);
+#endif
+
+
     AppLayerHtpEnableRequestBodyCallback();
     AppLayerHtpNeedFileInspection();
 
@@ -301,11 +291,6 @@ void RunUnittests(int list_unittests, const char *regex_arg)
         UtCleanup();
 #ifdef BUILD_HYPERSCAN
         MpmHSGlobalCleanup();
-#endif
-#ifdef __SC_CUDA_SUPPORT__
-        if (PatternMatchDefaultMatcher() == MPM_AC_CUDA)
-            MpmCudaBufferDeSetup();
-        CudaHandlerFreeProfiles();
 #endif
         if (failed) {
             exit(EXIT_FAILURE);

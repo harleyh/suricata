@@ -51,6 +51,9 @@
 #define TCP_OPT_SACKOK                       0x04
 #define TCP_OPT_SACK                         0x05
 #define TCP_OPT_TS                           0x08
+#define TCP_OPT_TFO                          0x22   /* TCP Fast Open */
+#define TCP_OPT_EXP1                         0xfd   /* Experimental, could be TFO */
+#define TCP_OPT_EXP2                         0xfe   /* Experimental, could be TFO */
 
 #define TCP_OPT_SACKOK_LEN                   2
 #define TCP_OPT_WS_LEN                       3
@@ -58,24 +61,26 @@
 #define TCP_OPT_MSS_LEN                      4
 #define TCP_OPT_SACK_MIN_LEN                 10 /* hdr 2, 1 pair 8 = 10 */
 #define TCP_OPT_SACK_MAX_LEN                 34 /* hdr 2, 4 pair 32= 34 */
+#define TCP_OPT_TFO_MIN_LEN                  6  /* kind, len, 6 */
+#define TCP_OPT_TFO_MAX_LEN                  20 /* kind, len, 18 */
 
 /** Max valid wscale value. */
 #define TCP_WSCALE_MAX                       14
 
 #define TCP_GET_RAW_OFFSET(tcph)             (((tcph)->th_offx2 & 0xf0) >> 4)
 #define TCP_GET_RAW_X2(tcph)                 (unsigned char)((tcph)->th_offx2 & 0x0f)
-#define TCP_GET_RAW_SRC_PORT(tcph)           ntohs((tcph)->th_sport)
-#define TCP_GET_RAW_DST_PORT(tcph)           ntohs((tcph)->th_dport)
+#define TCP_GET_RAW_SRC_PORT(tcph)           SCNtohs((tcph)->th_sport)
+#define TCP_GET_RAW_DST_PORT(tcph)           SCNtohs((tcph)->th_dport)
 
 #define TCP_SET_RAW_TCP_OFFSET(tcph, value)  ((tcph)->th_offx2 = (unsigned char)(((tcph)->th_offx2 & 0x0f) | (value << 4)))
 #define TCP_SET_RAW_TCP_X2(tcph, value)      ((tcph)->th_offx2 = (unsigned char)(((tcph)->th_offx2 & 0xf0) | (value & 0x0f)))
 
-#define TCP_GET_RAW_SEQ(tcph)                ntohl((tcph)->th_seq)
-#define TCP_GET_RAW_ACK(tcph)                ntohl((tcph)->th_ack)
+#define TCP_GET_RAW_SEQ(tcph)                SCNtohl((tcph)->th_seq)
+#define TCP_GET_RAW_ACK(tcph)                SCNtohl((tcph)->th_ack)
 
-#define TCP_GET_RAW_WINDOW(tcph)             ntohs((tcph)->th_win)
-#define TCP_GET_RAW_URG_POINTER(tcph)        ntohs((tcph)->th_urp)
-#define TCP_GET_RAW_SUM(tcph)                ntohs((tcph)->th_sum)
+#define TCP_GET_RAW_WINDOW(tcph)             SCNtohs((tcph)->th_win)
+#define TCP_GET_RAW_URG_POINTER(tcph)        SCNtohs((tcph)->th_urp)
+#define TCP_GET_RAW_SUM(tcph)                SCNtohs((tcph)->th_sum)
 
 /** macro for getting the first timestamp from the packet in host order */
 #define TCP_GET_TSVAL(p)                    ((p)->tcpvars.ts_val)
@@ -88,6 +93,7 @@
 #define TCP_HAS_SACKOK(p)                   ((p)->tcpvars.sackok.type == TCP_OPT_SACKOK)
 #define TCP_HAS_TS(p)                       ((p)->tcpvars.ts_set == TRUE)
 #define TCP_HAS_MSS(p)                      ((p)->tcpvars.mss.type == TCP_OPT_MSS)
+#define TCP_HAS_TFO(p)                      ((p)->tcpvars.tfo.type == TCP_OPT_TFO)
 
 /** macro for getting the wscale from the packet. */
 #define TCP_GET_WSCALE(p)                    (TCP_HAS_WSCALE((p)) ? \
@@ -97,6 +103,7 @@
 #define TCP_GET_SACKOK(p)                    (TCP_HAS_SACKOK((p)) ? 1 : 0)
 #define TCP_GET_SACK_PTR(p)                  TCP_HAS_SACK((p)) ? (p)->tcpvars.sack.data : NULL
 #define TCP_GET_SACK_CNT(p)                  (TCP_HAS_SACK((p)) ? (((p)->tcpvars.sack.len - 2) / 8) : 0)
+#define TCP_GET_MSS(p)                       SCNtohs(*(uint16_t *)((p)->tcpvars.mss.data))
 
 #define TCP_GET_OFFSET(p)                    TCP_GET_RAW_OFFSET((p)->tcph)
 #define TCP_GET_X2(p)                        TCP_GET_RAW_X2((p)->tcph)
@@ -122,7 +129,7 @@
 typedef struct TCPOpt_ {
     uint8_t type;
     uint8_t len;
-    uint8_t *data;
+    const uint8_t *data;
 } TCPOpt;
 
 typedef struct TCPOptSackRecord_ {
@@ -153,6 +160,7 @@ typedef struct TCPVars_
     TCPOpt sackok;
     TCPOpt ws;
     TCPOpt mss;
+    TCPOpt tfo;         /* tcp fast open */
 } TCPVars;
 
 #define CLEAR_TCP_PACKET(p) {   \

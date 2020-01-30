@@ -42,10 +42,8 @@
 
 #include "util-unittest.h"
 #include "util-syslog.h"
+#include "rust.h"
 
-#ifdef HAVE_RUST
-#include "rust-log-gen.h"
-#endif
 
 #include "conf.h"
 
@@ -78,7 +76,7 @@ SCEnumCharMap sc_log_op_iface_map[ ] = {
 /**
  * \brief Used for synchronous output on WIN32
  */
-static SCMutex sc_log_stream_lock = NULL;
+static SCMutex sc_log_stream_lock;
 #endif /* OS_WIN32 */
 
 /**
@@ -140,7 +138,9 @@ static inline int SCLogMapLogLevelToSyslogLevel(int log_level)
         case SC_LOG_INFO:
             syslog_log_level = LOG_INFO;
             break;
+        case SC_LOG_CONFIG:
         case SC_LOG_DEBUG:
+        case SC_LOG_PERF:
             syslog_log_level = LOG_DEBUG;
             break;
         default:
@@ -200,8 +200,6 @@ static inline void SCLogPrintToSyslog(int syslog_log_level, const char *msg)
     return;
 }
 
-#ifdef HAVE_LIBJANSSON
-#include <jansson.h>
 /**
  */
 static int SCLogMessageJSON(struct timeval *tval, char *buffer, size_t buffer_size,
@@ -219,6 +217,13 @@ static int SCLogMessageJSON(struct timeval *tval, char *buffer, size_t buffer_si
     char timebuf[64];
     CreateIsoTimeString(tval, timebuf, sizeof(timebuf));
     json_object_set_new(js, "timestamp", json_string(timebuf));
+
+    const char *s = SCMapEnumValueToName(log_level, sc_log_level_map);
+    if (s != NULL) {
+        json_object_set_new(js, "log_level", json_string(s));
+    } else {
+        json_object_set_new(js, "log_level", json_string("INVALID"));
+    }
 
     json_object_set_new(js, "event_type", json_string("engine"));
 
@@ -257,7 +262,6 @@ static int SCLogMessageJSON(struct timeval *tval, char *buffer, size_t buffer_si
 error:
     return -1;
 }
-#endif /* HAVE_LIBJANSSON */
 
 /**
  * \brief Adds the global log_format to the outgoing buffer
@@ -279,10 +283,8 @@ static SCError SCLogMessageGetBuffer(
                      const unsigned int line, const char *function,
                      const SCError error_code, const char *message)
 {
-#ifdef HAVE_LIBJANSSON
     if (type == SC_LOG_OP_TYPE_JSON)
         return SCLogMessageJSON(tval, buffer, buffer_size, log_level, file, line, function, error_code, message);
-#endif
 
     char *temp = buffer;
     const char *s = NULL;
@@ -315,7 +317,7 @@ static SCError SCLogMessageGetBuffer(
     char *temp_fmt = local_format;
     char *substr = temp_fmt;
 
-	while ( (temp_fmt = index(temp_fmt, SC_LOG_FMT_PREFIX)) ) {
+	while ( (temp_fmt = strchr(temp_fmt, SC_LOG_FMT_PREFIX)) ) {
         if ((temp - buffer) > SC_LOG_MAX_LOG_MSG_LEN) {
             return SC_OK;
         }
@@ -505,22 +507,24 @@ static SCError SCLogMessageGetBuffer(
     return SC_OK;
 }
 
-static void SCLogReopen(SCLogOPIfaceCtx *op_iface_ctx)
+/** \internal
+ *  \brief try to reopen file
+ *  \note no error reporting here, as we're called by SCLogMessage
+ *  \retval status 0 ok, -1 error */
+static int SCLogReopen(SCLogOPIfaceCtx *op_iface_ctx)
 {
-    if (op_iface_ctx->file_d == NULL) {
-        return;
-    }
-
     if (op_iface_ctx->file == NULL) {
-        return;
+        return 0;
     }
 
-    fclose(op_iface_ctx->file_d);
+    if (op_iface_ctx->file_d != NULL) {
+        fclose(op_iface_ctx->file_d);
+    }
     op_iface_ctx->file_d = fopen(op_iface_ctx->file, "a");
     if (op_iface_ctx->file_d == NULL) {
-        SCLogError(SC_ERR_FOPEN, "Erroring re-opening file \"%s\": %s",
-            op_iface_ctx->file, strerror(errno));
+        return -1;
     }
+    return 0;
 }
 
 /**
@@ -577,13 +581,20 @@ SCError SCLogMessage(const SCLogLevel log_level, const char *file,
                                           log_level, file, line, function,
                                           error_code, message) == 0)
                 {
+                    int r = 0;
                     SCMutexLock(&op_iface_ctx->fp_mutex);
                     if (op_iface_ctx->rotation_flag) {
-                        SCLogReopen(op_iface_ctx);
+                        r = SCLogReopen(op_iface_ctx);
                         op_iface_ctx->rotation_flag = 0;
                     }
                     SCLogPrintToStream(op_iface_ctx->file_d, buffer);
                     SCMutexUnlock(&op_iface_ctx->fp_mutex);
+
+                    /* report error outside of lock to avoid recursion */
+                    if (r == -1) {
+                        SCLogError(SC_ERR_FOPEN, "re-opening file \"%s\" failed: %s",
+                                op_iface_ctx->file, strerror(errno));
+                    }
                 }
                 break;
             case SC_LOG_OP_IFACE_SYSLOG:
@@ -796,9 +807,11 @@ static inline SCLogOPIfaceCtx *SCLogInitConsoleOPIface(const char *log_format,
     }
     iface_ctx->log_level = tmp_log_level;
 
+#ifndef OS_WIN32
     if (isatty(fileno(stdout)) && isatty(fileno(stderr))) {
         iface_ctx->use_color = TRUE;
     }
+#endif
 
     return iface_ctx;
 }
@@ -1101,7 +1114,8 @@ SCLogInitData *SCLogAllocLogInitData(void)
     return sc_lid;
 }
 
-#if 0
+#ifdef UNITTESTS
+#ifndef OS_WIN32
 /**
  * \brief Frees a SCLogInitData
  *
@@ -1110,18 +1124,13 @@ SCLogInitData *SCLogAllocLogInitData(void)
 static void SCLogFreeLogInitData(SCLogInitData *sc_lid)
 {
     if (sc_lid != NULL) {
-        if (sc_lid->startup_message != NULL)
-            SCFree(sc_lid->startup_message);
-        if (sc_lid->global_log_format != NULL)
-            SCFree(sc_lid->global_log_format);
-        if (sc_lid->op_filter != NULL)
-            SCFree(sc_lid->op_filter);
-
         SCLogFreeLogOPIfaceCtx(sc_lid->op_ifaces);
+        SCFree(sc_lid);
     }
 
     return;
 }
+#endif
 #endif
 
 /**
@@ -1270,10 +1279,7 @@ void SCLogInitLogModule(SCLogInitData *sc_lid)
 
     //SCOutputPrint(sc_did->startup_message);
 
-#ifdef HAVE_RUST
     rs_log_set_level(sc_log_global_log_level);
-#endif
-
     return;
 }
 
@@ -1282,6 +1288,14 @@ void SCLogLoadConfig(int daemon, int verbose)
     ConfNode *outputs;
     SCLogInitData *sc_lid;
     int have_logging = 0;
+    int max_level = 0;
+    SCLogLevel min_level = 0;
+
+    /* If verbose logging was requested, set the minimum as
+     * SC_LOG_NOTICE plus the extra verbosity. */
+    if (verbose) {
+        min_level = SC_LOG_NOTICE + verbose;
+    }
 
     outputs = ConfGetNode("logging.outputs");
     if (outputs == NULL) {
@@ -1298,30 +1312,23 @@ void SCLogLoadConfig(int daemon, int verbose)
     /* Get default log level and format. */
     const char *default_log_level_s = NULL;
     if (ConfGet("logging.default-log-level", &default_log_level_s) == 1) {
-        sc_lid->global_log_level =
+        SCLogLevel default_log_level =
             SCMapEnumNameToValue(default_log_level_s, sc_log_level_map);
-        if (sc_lid->global_log_level == -1) {
+        if (default_log_level == -1) {
             SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid default log level: %s",
                 default_log_level_s);
             exit(EXIT_FAILURE);
         }
+        sc_lid->global_log_level = MAX(min_level, default_log_level);
     }
     else {
-        SCLogWarning(SC_ERR_MISSING_CONFIG_PARAM,
-            "No default log level set, will use notice.");
-        sc_lid->global_log_level = SC_LOG_NOTICE;
-    }
-
-    if (verbose) {
-        sc_lid->global_log_level += verbose;
-        if (sc_lid->global_log_level > SC_LOG_LEVEL_MAX)
-            sc_lid->global_log_level = SC_LOG_LEVEL_MAX;
+        sc_lid->global_log_level = MAX(min_level, SC_LOG_NOTICE);
     }
 
     if (ConfGet("logging.default-log-format", &sc_lid->global_log_format) != 1)
         sc_lid->global_log_format = SC_LOG_DEF_LOG_FORMAT;
 
-    ConfGet("logging.default-output-filter", &sc_lid->op_filter);
+    (void)ConfGet("logging.default-output-filter", &sc_lid->op_filter);
 
     ConfNode *seq_node, *output;
     TAILQ_FOREACH(seq_node, &outputs->head, next) {
@@ -1345,13 +1352,7 @@ void SCLogLoadConfig(int daemon, int verbose)
             if (strcmp(type_s, "regular") == 0)
                 type = SC_LOG_OP_TYPE_REGULAR;
             else if (strcmp(type_s, "json") == 0) {
-#ifdef HAVE_LIBJANSSON
                 type = SC_LOG_OP_TYPE_JSON;
-#else
-                SCLogError(SC_ERR_INVALID_ARGUMENT, "libjansson support not "
-                        "compiled in, can't use 'json' logging");
-                exit(EXIT_FAILURE);
-#endif /* HAVE_LIBJANSSON */
             }
         }
 
@@ -1369,7 +1370,11 @@ void SCLogLoadConfig(int daemon, int verbose)
                     level_s);
                 exit(EXIT_FAILURE);
             }
+            max_level = MAX(max_level, level);
         }
+
+        /* Increase the level of extra verbosity was requested. */
+        level = MAX(min_level, level);
 
         if (strcmp(output->name, "console") == 0) {
             op_iface_ctx = SCLogInitConsoleOPIface(format, level, type);
@@ -1381,8 +1386,17 @@ void SCLogLoadConfig(int daemon, int verbose)
                     "Logging to file requires a filename");
                 exit(EXIT_FAILURE);
             }
+            char *path = NULL;
+            if (!(PathIsAbsolute(filename))) {
+                path = SCLogGetLogFilename(filename);
+            } else {
+                path = SCStrdup(filename);
+            }
+            if (path == NULL)
+                FatalError(SC_ERR_FATAL, "failed to setup output to file");
             have_logging = 1;
-            op_iface_ctx = SCLogInitFileOPIface(filename, format, level, type);
+            op_iface_ctx = SCLogInitFileOPIface(path, format, level, type);
+            SCFree(path);
         }
         else if (strcmp(output->name, "syslog") == 0) {
             int facility = SC_LOG_DEF_SYSLOG_FACILITY;
@@ -1397,8 +1411,7 @@ void SCLogLoadConfig(int daemon, int verbose)
                     facility = SC_LOG_DEF_SYSLOG_FACILITY;
                 }
             }
-            printf("Initialization syslog logging with format \"%s\".\n",
-                format);
+            SCLogDebug("Initializing syslog logging with format \"%s\"", format);
             have_logging = 1;
             op_iface_ctx = SCLogInitSyslogOPIface(facility, format, level, type);
         }
@@ -1418,6 +1431,8 @@ void SCLogLoadConfig(int daemon, int verbose)
                    " 'logging.outputs' in the YAML.");
     }
 
+    /* Set the global log level to that of the max level used. */
+    sc_lid->global_log_level = MAX(sc_lid->global_log_level, max_level);
     SCLogInitLogModule(sc_lid);
 
     SCLogDebug("sc_log_global_log_level: %d", sc_log_global_log_level);
@@ -1439,16 +1454,11 @@ void SCLogLoadConfig(int daemon, int verbose)
  */
 static char *SCLogGetLogFilename(const char *filearg)
 {
-    const char *log_dir;
-    char *log_filename;
-
-    log_dir = ConfigGetLogDirectory();
-
-    log_filename = SCMalloc(PATH_MAX);
+    const char *log_dir = ConfigGetLogDirectory();
+    char *log_filename = SCMalloc(PATH_MAX);
     if (unlikely(log_filename == NULL))
         return NULL;
     snprintf(log_filename, PATH_MAX, "%s/%s", log_dir, filearg);
-
     return log_filename;
 }
 
@@ -1471,10 +1481,7 @@ void SCLogDeInitLogModule(void)
     SCLogReleaseFGFilters();
 
 #if defined (OS_WIN32)
-	if (sc_log_stream_lock != NULL) {
-		SCMutexDestroy(&sc_log_stream_lock);
-		sc_log_stream_lock = NULL;
-	}
+    SCMutexDestroy(&sc_log_stream_lock);
 #endif /* OS_WIN32 */
 
     return;
@@ -1493,8 +1500,7 @@ void SCLogDeInitLogModule(void)
 
 static int SCLogTestInit01(void)
 {
-    int result = 1;
-
+#ifndef OS_WIN32
     /* unset any environment variables set for the logging module */
     unsetenv(SC_LOG_ENV_LOG_LEVEL);
     unsetenv(SC_LOG_ENV_LOG_OP_IFACE);
@@ -1502,13 +1508,12 @@ static int SCLogTestInit01(void)
 
     SCLogInitLogModule(NULL);
 
-    if (sc_log_config == NULL)
-        return 0;
+    FAIL_IF_NULL(sc_log_config);
 
-    result &= (SC_LOG_DEF_LOG_LEVEL == sc_log_config->log_level);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(SC_LOG_DEF_LOG_LEVEL == sc_log_config->log_level);
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                SC_LOG_DEF_LOG_OP_IFACE == sc_log_config->op_ifaces->iface);
-    result &= (sc_log_config->log_format != NULL &&
+    FAIL_IF_NOT(sc_log_config->log_format != NULL &&
                strcmp(SC_LOG_DEF_LOG_FORMAT, sc_log_config->log_format) == 0);
 
     SCLogDeInitLogModule();
@@ -1519,10 +1524,10 @@ static int SCLogTestInit01(void)
 
     SCLogInitLogModule(NULL);
 
-    result &= (SC_LOG_DEBUG == sc_log_config->log_level);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(SC_LOG_DEBUG == sc_log_config->log_level);
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                SC_LOG_OP_IFACE_CONSOLE == sc_log_config->op_ifaces->iface);
-    result &= (sc_log_config->log_format != NULL &&
+    FAIL_IF_NOT(sc_log_config->log_format != NULL &&
                !strcmp("%n- %l", sc_log_config->log_format));
 
     unsetenv(SC_LOG_ENV_LOG_LEVEL);
@@ -1530,19 +1535,18 @@ static int SCLogTestInit01(void)
     unsetenv(SC_LOG_ENV_LOG_FORMAT);
 
     SCLogDeInitLogModule();
-
-    return result;
+#endif
+    PASS;
 }
 
 static int SCLogTestInit02(void)
 {
+#ifndef OS_WIN32
     SCLogInitData *sc_lid = NULL;
     SCLogOPIfaceCtx *sc_iface_ctx = NULL;
-    int result = 1;
     char *logfile = SCLogGetLogFilename("boo.txt");
     sc_lid = SCLogAllocLogInitData();
-    if (sc_lid == NULL)
-        return 0;
+    FAIL_IF_NULL(sc_lid);
     sc_lid->startup_message = "Test02";
     sc_lid->global_log_level = SC_LOG_DEBUG;
     sc_lid->op_filter = "boo";
@@ -1555,29 +1559,28 @@ static int SCLogTestInit02(void)
 
     SCLogInitLogModule(sc_lid);
 
-    if (sc_log_config == NULL)
-        return 0;
+    FAIL_IF_NULL(sc_log_config);
 
-    result &= (SC_LOG_DEBUG == sc_log_config->log_level);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(SC_LOG_DEBUG == sc_log_config->log_level);
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                SC_LOG_OP_IFACE_FILE == sc_log_config->op_ifaces->iface);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->next != NULL &&
                SC_LOG_OP_IFACE_CONSOLE == sc_log_config->op_ifaces->next->iface);
-    result &= (sc_log_config->log_format != NULL &&
+    FAIL_IF_NOT(sc_log_config->log_format != NULL &&
                strcmp(SC_LOG_DEF_LOG_FORMAT, sc_log_config->log_format) == 0);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->log_format != NULL &&
                strcmp("%m - %d", sc_log_config->op_ifaces->log_format) == 0);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->next != NULL &&
                sc_log_config->op_ifaces->next->log_format == NULL);
 
+    SCLogFreeLogInitData(sc_lid);
     SCLogDeInitLogModule();
 
     sc_lid = SCLogAllocLogInitData();
-    if (sc_lid == NULL)
-        return 0;
+    FAIL_IF_NULL(sc_lid);
     sc_lid->startup_message = "Test02";
     sc_lid->global_log_level = SC_LOG_DEBUG;
     sc_lid->op_filter = "boo";
@@ -1585,52 +1588,49 @@ static int SCLogTestInit02(void)
 
     SCLogInitLogModule(sc_lid);
 
-    if (sc_log_config == NULL)
-        return 0;
+    FAIL_IF_NULL(sc_log_config);
 
-    result &= (SC_LOG_DEBUG == sc_log_config->log_level);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(SC_LOG_DEBUG == sc_log_config->log_level);
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                SC_LOG_OP_IFACE_CONSOLE == sc_log_config->op_ifaces->iface);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->next == NULL);
-    result &= (sc_log_config->log_format != NULL &&
+    FAIL_IF_NOT(sc_log_config->log_format != NULL &&
                strcmp("kaboo", sc_log_config->log_format) == 0);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->log_format == NULL);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->next == NULL);
 
+    SCLogFreeLogInitData(sc_lid);
     SCLogDeInitLogModule();
-
-    return result;
+    SCFree(logfile);
+#endif
+    PASS;
 }
 
 static int SCLogTestInit03(void)
 {
-    int result = 1;
-
     SCLogInitLogModule(NULL);
 
     SCLogAddFGFilterBL(NULL, "bamboo", -1);
     SCLogAddFGFilterBL(NULL, "soo", -1);
     SCLogAddFGFilterBL(NULL, "dummy", -1);
 
-    result &= (SCLogPrintFGFilters() == 3);
+    FAIL_IF_NOT(SCLogPrintFGFilters() == 3);
 
     SCLogAddFGFilterBL(NULL, "dummy1", -1);
     SCLogAddFGFilterBL(NULL, "dummy2", -1);
 
-    result &= (SCLogPrintFGFilters() == 5);
+    FAIL_IF_NOT(SCLogPrintFGFilters() == 5);
 
     SCLogDeInitLogModule();
 
-    return result;
+    PASS;
 }
 
 static int SCLogTestInit04(void)
 {
-    int result = 1;
-
     SCLogInitLogModule(NULL);
 
     SCLogAddFDFilter("bamboo");
@@ -1638,34 +1638,33 @@ static int SCLogTestInit04(void)
     SCLogAddFDFilter("foo");
     SCLogAddFDFilter("roo");
 
-    result &= (SCLogPrintFDFilters() == 4);
+    FAIL_IF_NOT(SCLogPrintFDFilters() == 4);
 
     SCLogAddFDFilter("loo");
     SCLogAddFDFilter("soo");
 
-    result &= (SCLogPrintFDFilters() == 5);
+    FAIL_IF_NOT(SCLogPrintFDFilters() == 5);
 
     SCLogRemoveFDFilter("bamboo");
     SCLogRemoveFDFilter("soo");
     SCLogRemoveFDFilter("foo");
     SCLogRemoveFDFilter("noo");
 
-    result &= (SCLogPrintFDFilters() == 2);
+    FAIL_IF_NOT(SCLogPrintFDFilters() == 2);
 
     SCLogDeInitLogModule();
 
-    return result;
+    PASS;
 }
 
 static int SCLogTestInit05(void)
 {
-    int result = 1;
+    char str[4096];
+    memset(str, 'A', sizeof(str));
+    SCLogInfo("%s", str);
 
-    SCLogInfo("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-
-    return result;
+    PASS;
 }
-
 
 #endif /* UNITTESTS */
 

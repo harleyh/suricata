@@ -48,7 +48,7 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectRpcMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+static int DetectRpcMatch (DetectEngineThreadCtx *, Packet *,
         const Signature *, const SigMatchCtx *);
 static int DetectRpcSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectRpcRegisterTests(void);
@@ -87,7 +87,7 @@ void DetectRpcRegister (void)
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+static int DetectRpcMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
         const Signature *s, const SigMatchCtx *ctx)
 {
     /* PrintRawDataFp(stdout, p->payload, p->payload_len); */
@@ -112,25 +112,25 @@ static int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet
         return 0;
     }
 
-    /* Point through the rpc msg structure. Use ntohl() to compare values */
+    /* Point through the rpc msg structure. Use SCNtohl() to compare values */
     RpcMsg *msg = (RpcMsg *)rpcmsg;
 
     /* If its not a call, no match */
-    if (ntohl(msg->type) != 0) {
+    if (SCNtohl(msg->type) != 0) {
         SCLogDebug("RPC message type is not a call");
         return 0;
     }
 
-    if (ntohl(msg->prog) != rd->program)
+    if (SCNtohl(msg->prog) != rd->program)
         return 0;
 
-    if ((rd->flags & DETECT_RPC_CHECK_VERSION) && ntohl(msg->vers) != rd->program_version)
+    if ((rd->flags & DETECT_RPC_CHECK_VERSION) && SCNtohl(msg->vers) != rd->program_version)
         return 0;
 
-    if ((rd->flags & DETECT_RPC_CHECK_PROCEDURE) && ntohl(msg->proc) != rd->procedure)
+    if ((rd->flags & DETECT_RPC_CHECK_PROCEDURE) && SCNtohl(msg->proc) != rd->procedure)
         return 0;
 
-    SCLogDebug("prog:%u pver:%u proc:%u matched", ntohl(msg->prog), ntohl(msg->vers), ntohl(msg->proc));
+    SCLogDebug("prog:%u pver:%u proc:%u matched", SCNtohl(msg->prog), SCNtohl(msg->vers), SCNtohl(msg->proc));
     return 1;
 }
 

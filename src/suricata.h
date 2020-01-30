@@ -66,11 +66,10 @@
 
 #include "suricata-common.h"
 #include "packet-queue.h"
-#include "data-queue.h"
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "4.0.0-dev"
+#define PROG_VER PACKAGE_VERSION
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -84,10 +83,10 @@
 #define DEFAULT_PID_BASENAME "suricata.pid"
 #define DEFAULT_PID_FILENAME DEFAULT_PID_DIR DEFAULT_PID_BASENAME
 
-#define DOC_URL "http://suricata.readthedocs.io/en/"
+#define DOC_URL "https://suricata.readthedocs.io/en/"
 
 #if defined RELEASE
-#define DOC_VERSION PROG_VER
+#define DOC_VERSION "suricata-" PROG_VER
 #else
 #define DOC_VERSION "latest"
 #endif
@@ -131,15 +130,14 @@ enum {
  */
 PacketQueue trans_q[256];
 
-SCDQDataQueue data_queues[256];
-
 typedef struct SCInstance_ {
     enum RunModes run_mode;
+    enum RunModes aux_run_mode;
 
     char pcap_dev[128];
     char *sig_file;
     int sig_file_exclusive;
-    const char *pid_filename;
+    char *pid_filename;
     char *regex_arg;
 
     char *keyword_info;
@@ -152,6 +150,11 @@ typedef struct SCInstance_ {
     uint32_t userid;
     uint32_t groupid;
 #endif /* OS_WIN32 */
+
+    bool system;
+    bool set_logdir;
+    bool set_datadir;
+
     int delayed_detect;
     int disabled_detect;
     int daemon;
@@ -164,6 +167,7 @@ typedef struct SCInstance_ {
     const char *log_dir;
     const char *progname; /**< pointer to argv[0] */
     const char *conf_filename;
+    char *strict_rule_parsing_string;
 } SCInstance;
 
 
@@ -172,19 +176,11 @@ void GlobalsInitPreConfig(void);
 
 extern volatile uint8_t suricata_ctl_flags;
 extern int g_disable_randomness;
+extern uint16_t g_vlan_mask;
 
-/* uppercase to lowercase conversion lookup table */
-uint8_t g_u8_lowercasetable[256];
-
-/* marco to do the actual lookup */
-//#define u8_tolower(c) g_u8_lowercasetable[(c)]
-// these 2 are slower:
-//#define u8_tolower(c) ((c) >= 'A' && (c) <= 'Z') ? g_u8_lowercasetable[(c)] : (c)
-//#define u8_tolower(c) (((c) >= 'A' && (c) <= 'Z') ? ((c) + ('a' - 'A')) : (c))
-
-/* this is faster than the table lookup */
 #include <ctype.h>
 #define u8_tolower(c) tolower((uint8_t)(c))
+#define u8_toupper(c) toupper((uint8_t)(c))
 
 void EngineStop(void);
 void EngineDone(void);
@@ -193,13 +189,16 @@ int RunmodeIsUnittests(void);
 int RunmodeGetCurrent(void);
 int IsRuleReloadSet(int quiet);
 
+int SuriHasSigFile(void);
+
 extern int run_mode;
-extern int run_mode_offline;
 
 void PreRunInit(const int runmode);
 void PreRunPostPrivsDropInit(const int runmode);
 void PostRunDeinit(const int runmode, struct timeval *start_time);
 void RegisterAllModules(void);
+
+const char *GetProgramVersion(void);
 
 #endif /* __SURICATA_H__ */
 

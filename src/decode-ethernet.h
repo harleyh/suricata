@@ -27,7 +27,7 @@
 #define ETHERNET_HEADER_LEN           14
 
 /* Cisco Fabric Path / DCE header length. */
-#define ETHERNET_DCE_HEADER_LEN       ETHERNET_HEADER_LEN + 2
+#define ETHERNET_DCE_HEADER_LEN       (ETHERNET_HEADER_LEN + 2)
 
 /* Ethernet types -- taken from Snort and Libdnet */
 #define ETHERNET_TYPE_PUP             0x0200 /* PUP protocol */
@@ -41,6 +41,7 @@
 #define ETHERNET_TYPE_PPPOE_DISC      0x8863 /* discovery stage */
 #define ETHERNET_TYPE_PPPOE_SESS      0x8864 /* session stage */
 #define ETHERNET_TYPE_8021AD          0x88a8
+#define ETHERNET_TYPE_8021AH          0x88e7
 #define ETHERNET_TYPE_8021Q           0x8100
 #define ETHERNET_TYPE_LOOP            0x9000
 #define ETHERNET_TYPE_8021QINQ        0x9100

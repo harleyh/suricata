@@ -66,6 +66,10 @@ typedef struct SMTPString_ {
 typedef struct SMTPTransaction_ {
     /** id of this tx, starting at 0 */
     uint64_t tx_id;
+
+    uint64_t detect_flags_ts;
+    uint64_t detect_flags_tc;
+
     int done;
     /** indicates loggers done logging */
     uint32_t logged;
@@ -96,6 +100,8 @@ typedef struct SMTPConfig {
     uint32_t content_inspect_min_size;
     uint32_t content_inspect_window;
 
+    int raw_extraction;
+
     StreamingBufferConfig sbcfg;
 } SMTPConfig;
 
@@ -103,15 +109,17 @@ typedef struct SMTPState_ {
     SMTPTransaction *curr_tx;
     TAILQ_HEAD(, SMTPTransaction_) tx_list;  /**< transaction list */
     uint64_t tx_cnt;
+    uint64_t toserver_data_count;
+    uint64_t toserver_last_data_stamp;
 
     /* current input that is being parsed */
-    uint8_t *input;
+    const uint8_t *input;
     int32_t input_len;
     uint8_t direction;
 
     /* --parser details-- */
     /** current line extracted by the parser from the call to SMTPGetline() */
-    uint8_t *current_line;
+    const uint8_t *current_line;
     /** length of the line in current_line.  Doesn't include the delimiter */
     int32_t current_line_len;
     uint8_t current_line_delimiter_len;
@@ -153,13 +161,14 @@ typedef struct SMTPState_ {
      *  handler */
     uint16_t cmds_idx;
 
+    /* HELO of HELO message content */
+    uint16_t helo_len;
+    uint8_t *helo;
+
     /* SMTP Mime decoding and file extraction */
     /** the list of files sent to the server */
     FileContainer *files_ts;
-
-    /* HELO of HELO message content */
-    uint8_t *helo;
-    uint16_t helo_len;
+    uint32_t file_track_id;
 } SMTPState;
 
 /* Create SMTP config structure */

@@ -58,6 +58,7 @@
 #include "app-layer.h"
 #include "app-layer-protos.h"
 #include "app-layer-parser.h"
+#include "app-layer-htp.h"
 
 #include "util-classification-config.h"
 #include "util-unittest.h"
@@ -69,11 +70,6 @@
 #include "app-layer-detect-proto.h"
 
 extern int sc_set_caps;
-
-static pcre *config_pcre = NULL;
-static pcre *option_pcre = NULL;
-static pcre_extra *config_pcre_extra = NULL;
-static pcre_extra *option_pcre_extra = NULL;
 
 static void SigMatchTransferSigMatchAcrossLists(SigMatch *sm,
         SigMatch **src_sm_list, SigMatch **src_sm_list_tail,
@@ -99,29 +95,6 @@ typedef struct SigDuplWrapper_ {
 #define CONFIG_DST    5
 #define CONFIG_DP     6
 #define CONFIG_OPTS   7
-
-/* if enclosed in [], spaces are allowed */
-#define CONFIG_PCRE_SRCDST "(" \
-                            "[\\[\\]A-z0-9\\.\\:_\\$\\!\\-,\\/]+" \
-                           "|" \
-                            "\\[[\\[\\]A-z0-9\\.\\:_\\$\\!\\-,\\/\\s]+\\]"\
-                           ")"
-
-/* if enclosed in [], spaces are allowed */
-#define CONFIG_PCRE_PORT   "([\\[\\]\\:A-z0-9_\\$\\!,\\s]+)"
-
-/* format: action space(s) protocol spaces(s) src space(s) sp spaces(s) dir spaces(s) dst spaces(s) dp spaces(s) options */
-#define CONFIG_PCRE "^([A-z]+)\\s+([A-z0-9\\-]+)\\s+" \
-                    CONFIG_PCRE_SRCDST \
-                    "\\s+"\
-                    CONFIG_PCRE_PORT \
-                    "\\s+(-\\>|\\<\\>|\\<\\-)\\s+" \
-                    CONFIG_PCRE_SRCDST \
-                    "\\s+" \
-                    CONFIG_PCRE_PORT \
-                    "(?:\\s+\\((.*)?(?:\\s*)\\))?(?:(?:\\s*)\\n)?\\s*$"
-#define OPTION_PARTS 3
-#define OPTION_PCRE "^\\s*([A-z_0-9-\\.]+)(?:\\s*\\:\\s*(.*)(?<!\\\\))?\\s*;\\s*(?:\\s*(.*))?\\s*$"
 
 /** helper structure for sig parsing */
 typedef struct SignatureParser_ {
@@ -210,6 +183,12 @@ int DetectEngineContentModifierBufferSetup(DetectEngineCtx *de_ctx,
                    sigmatch_table[sm_type].name);
         goto end;
     }
+    if (cd->flags & DETECT_CONTENT_REPLACE) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "%s rule can not "
+                   "be used with the replace rule keyword",
+                   sigmatch_table[sm_type].name);
+        goto end;
+    }
     if (cd->flags & (DETECT_CONTENT_WITHIN | DETECT_CONTENT_DISTANCE)) {
         SigMatch *pm = DetectGetLastSMByListPtr(s, sm->prev,
             DETECT_CONTENT, DETECT_PCRE, -1);
@@ -279,6 +258,14 @@ void SigMatchFree(SigMatch *sm)
     SCFree(sm);
 }
 
+static enum DetectKeywordId SigTableGetIndex(const SigTableElmt *e)
+{
+    const SigTableElmt *table = &sigmatch_table[0];
+    ptrdiff_t offset = e - table;
+    BUG_ON(offset >= DETECT_TBLSIZE);
+    return (enum DetectKeywordId)offset;
+}
+
 /* Get the detection module by name */
 static SigTableElmt *SigTableGet(char *name)
 {
@@ -299,6 +286,56 @@ static SigTableElmt *SigTableGet(char *name)
     return NULL;
 }
 
+bool SigMatchSilentErrorEnabled(const DetectEngineCtx *de_ctx,
+        const enum DetectKeywordId id)
+{
+    return de_ctx->sm_types_silent_error[id];
+}
+
+bool SigMatchStrictEnabled(const enum DetectKeywordId id)
+{
+    if (id < DETECT_TBLSIZE) {
+        return ((sigmatch_table[id].flags & SIGMATCH_STRICT_PARSING) != 0);
+    }
+    return false;
+}
+
+void SigTableApplyStrictCommandlineOption(const char *str)
+{
+    if (str == NULL) {
+        /* nothing to be done */
+        return;
+    }
+
+    /* "all" just sets the flag for each keyword */
+    if (strcmp(str, "all") == 0) {
+        for (int i = 0; i < DETECT_TBLSIZE; i++) {
+            SigTableElmt *st = &sigmatch_table[i];
+            st->flags |= SIGMATCH_STRICT_PARSING;
+        }
+        return;
+    }
+
+    char *copy = SCStrdup(str);
+    if (copy == NULL)
+        FatalError(SC_ERR_MEM_ALLOC, "could not duplicate opt string");
+
+    char *xsaveptr = NULL;
+    char *key = strtok_r(copy, ",", &xsaveptr);
+    while (key != NULL) {
+        SigTableElmt *st = SigTableGet(key);
+        if (st != NULL) {
+            st->flags |= SIGMATCH_STRICT_PARSING;
+        } else {
+            SCLogWarning(SC_ERR_CMD_LINE, "'strict' command line "
+                    "argument '%s' not found", key);
+        }
+        key = strtok_r(NULL, ",", &xsaveptr);
+    }
+
+    SCFree(copy);
+}
+
 /**
  * \brief Append a SigMatch to the list type.
  *
@@ -308,6 +345,25 @@ static SigTableElmt *SigTableGet(char *name)
  */
 void SigMatchAppendSMToList(Signature *s, SigMatch *new, int list)
 {
+    if (list > 0 && (uint32_t)list >= s->init_data->smlists_array_size)
+    {
+        uint32_t old_size = s->init_data->smlists_array_size;
+        uint32_t new_size = (uint32_t)list + 1;
+        void *ptr = SCRealloc(s->init_data->smlists, (new_size * sizeof(SigMatch *)));
+        if (ptr == NULL)
+            abort();
+        s->init_data->smlists = ptr;
+        ptr = SCRealloc(s->init_data->smlists_tail, (new_size * sizeof(SigMatch *)));
+        if (ptr == NULL)
+            abort();
+        s->init_data->smlists_tail = ptr;
+        for (uint32_t i = old_size; i < new_size; i++) {
+            s->init_data->smlists[i] = NULL;
+            s->init_data->smlists_tail[i] = NULL;
+        }
+        s->init_data->smlists_array_size = new_size;
+    }
+
     if (s->init_data->smlists[list] == NULL) {
         s->init_data->smlists[list] = new;
         s->init_data->smlists_tail[list] = new;
@@ -367,15 +423,15 @@ static SigMatch *SigMatchGetLastSMByType(SigMatch *sm, int type)
  *  \note only supports the lists that are registered through
  *        DetectBufferTypeSupportsMpm().
  */
-SigMatch *DetectGetLastSMFromMpmLists(const Signature *s)
+SigMatch *DetectGetLastSMFromMpmLists(const DetectEngineCtx *de_ctx, const Signature *s)
 {
     SigMatch *sm_last = NULL;
     SigMatch *sm_new;
-    int sm_type;
+    uint32_t sm_type;
 
     /* if we have a sticky buffer, use that */
     if (s->init_data->list != DETECT_SM_LIST_NOTSET) {
-        if (!(DetectBufferTypeSupportsMpmGetById(s->init_data->list))) {
+        if (!(DetectBufferTypeSupportsMpmGetById(de_ctx, s->init_data->list))) {
             return NULL;
         }
 
@@ -386,9 +442,8 @@ SigMatch *DetectGetLastSMFromMpmLists(const Signature *s)
     }
 
     /* otherwise brute force it */
-    const int nlists = DetectBufferTypeMaxId();
-    for (sm_type = 0; sm_type < nlists; sm_type++) {
-        if (!DetectBufferTypeSupportsMpmGetById(sm_type))
+    for (sm_type = 0; sm_type < s->init_data->smlists_array_size; sm_type++) {
+        if (!DetectBufferTypeSupportsMpmGetById(de_ctx, sm_type))
             continue;
         SigMatch *sm_list = s->init_data->smlists_tail[sm_type];
         sm_new = SigMatchGetLastSMByType(sm_list, DETECT_CONTENT);
@@ -413,8 +468,7 @@ SigMatch *DetectGetLastSMFromLists(const Signature *s, ...)
     SigMatch *sm_new;
 
     /* otherwise brute force it */
-    const int nlists = DetectBufferTypeMaxId();
-    for (int buf_type = 0; buf_type < nlists; buf_type++) {
+    for (int buf_type = 0; buf_type < (int)s->init_data->smlists_array_size; buf_type++) {
         if (s->init_data->smlists[buf_type] == NULL)
             continue;
         if (s->init_data->list != DETECT_SM_LIST_NOTSET &&
@@ -514,7 +568,7 @@ SigMatch *DetectGetLastSMByListId(const Signature *s, int list_id, ...)
  */
 SigMatch *DetectGetLastSM(const Signature *s)
 {
-    const int nlists = DetectBufferTypeMaxId();
+    const int nlists = s->init_data->smlists_array_size;
     SigMatch *sm_last = NULL;
     SigMatch *sm_new;
     int i;
@@ -564,7 +618,7 @@ static void SigMatchTransferSigMatchAcrossLists(SigMatch *sm,
 
 int SigMatchListSMBelongsTo(const Signature *s, const SigMatch *key_sm)
 {
-    const int nlists = DetectBufferTypeMaxId();
+    const int nlists = s->init_data->smlists_array_size;
     int list = 0;
 
     for (list = 0; list < nlists; list++) {
@@ -581,70 +635,59 @@ int SigMatchListSMBelongsTo(const Signature *s, const SigMatch *key_sm)
     return -1;
 }
 
-void SigParsePrepare(void)
-{
-    const char *regexstr = CONFIG_PCRE;
-    const char *eb;
-    int eo;
-    int opts = 0;
-
-    opts |= PCRE_UNGREEDY;
-    config_pcre = pcre_compile(regexstr, opts, &eb, &eo, NULL);
-    if(config_pcre == NULL)
-    {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", regexstr, eo, eb);
-        exit(1);
-    }
-
-    config_pcre_extra = pcre_study(config_pcre, 0, &eb);
-    if(eb != NULL)
-    {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        exit(1);
-    }
-
-    regexstr = OPTION_PCRE;
-    opts |= PCRE_UNGREEDY;
-
-    option_pcre = pcre_compile(regexstr, opts, &eb, &eo, NULL);
-    if(option_pcre == NULL)
-    {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", regexstr, eo, eb);
-        exit(1);
-    }
-
-    option_pcre_extra = pcre_study(option_pcre, 0, &eb);
-    if(eb != NULL)
-    {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        exit(1);
-    }
-}
-
 static int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, char *optstr, char *output, size_t output_size)
 {
-#define MAX_SUBSTRINGS 30
-    int ov[MAX_SUBSTRINGS];
-    int ret = 0;
     SigTableElmt *st = NULL;
-    char optname[64];
-    char optvalue[DETECT_MAX_RULE_SIZE] = "";
+    char *optname = NULL;
+    char *optvalue = NULL;
 
-    ret = pcre_exec(option_pcre, option_pcre_extra, optstr, strlen(optstr), 0, 0, ov, MAX_SUBSTRINGS);
-    /* if successful, we either have:
-     *  2: keyword w/o value
-     *  3: keyword w value, final opt OR keyword w/o value, more options coming
-     *  4: keyword w value, more options coming
-     */
-    if (ret != 2 && ret != 3 && ret != 4) {
-        SCLogError(SC_ERR_PCRE_MATCH, "pcre_exec failed: ret %" PRId32 ", optstr \"%s\"", ret, optstr);
-        goto error;
+    /* Trim leading space. */
+    while (isblank(*optstr)) {
+        optstr++;
     }
 
-    /* extract the substrings */
-    if (pcre_copy_substring(optstr, ov, MAX_SUBSTRINGS, 1, optname, sizeof(optname)) < 0) {
-        goto error;
+    /* Look for the end of this option, handling escaped semicolons. */
+    char *optend = optstr;
+    for (;;) {
+        optend = strchr(optend, ';');
+        if (optend == NULL) {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "no terminating \";\" found");
+            goto error;
+        }
+        else if (optend > optstr && *(optend -1 ) == '\\') {
+            optend++;
+        } else {
+            break;
+        }
     }
+    *(optend++) = '\0';
+
+    /* Find the start of the option value. */
+    char *optvalptr = strchr(optstr, ':');
+    if (optvalptr) {
+        *(optvalptr++) = '\0';
+
+        /* Trim trailing space from name. */
+        for (size_t i = strlen(optvalptr); i > 0; i--) {
+            if (isblank(optvalptr[i - 1])) {
+                optvalptr[i - 1] = '\0';
+            } else {
+                break;
+            }
+        }
+
+        optvalue = optvalptr;
+    }
+
+    /* Trim trailing space from name. */
+    for (size_t i = strlen(optstr); i > 0; i--) {
+        if (isblank(optstr[i - 1])) {
+            optstr[i - 1] = '\0';
+        } else {
+            break;
+        }
+    }
+    optname = optstr;
 
     /* Call option parsing */
     st = SigTableGet(optname);
@@ -653,27 +696,8 @@ static int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, char *optstr, 
         goto error;
     }
 
-    if (ret == 3) {
-        if (st->flags & SIGMATCH_NOOPT) {
-            if (pcre_copy_substring(optstr, ov, MAX_SUBSTRINGS, 2, output, output_size) < 0) {
-                goto error;
-            }
-        } else {
-            if (pcre_copy_substring(optstr, ov, MAX_SUBSTRINGS, 2, optvalue, sizeof(optvalue)) < 0) {
-                goto error;
-            }
-        }
-    } else if (ret == 4) {
-        if (pcre_copy_substring(optstr, ov, MAX_SUBSTRINGS, 2, optvalue, sizeof(optvalue)) < 0) {
-            goto error;
-        }
-        if (pcre_copy_substring(optstr, ov, MAX_SUBSTRINGS, 3, output, output_size) < 0) {
-            goto error;
-        }
-    }
-
     if (!(st->flags & (SIGMATCH_NOOPT|SIGMATCH_OPTIONAL_OPT))) {
-        if (strlen(optvalue) == 0) {
+        if (optvalue == NULL || strlen(optvalue) == 0) {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "invalid formatting or malformed option to %s keyword: \'%s\'",
                     optname, optstr);
             goto error;
@@ -681,8 +705,22 @@ static int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, char *optstr, 
     }
     s->init_data->negated = false;
 
+    if (st->flags & SIGMATCH_INFO_DEPRECATED) {
+#define URL "https://suricata-ids.org/about/deprecation-policy/"
+        if (st->alternative == 0)
+            SCLogWarning(SC_WARN_DEPRECATED, "keyword '%s' is deprecated "
+                    "and will be removed soon. See %s", st->name, URL);
+        else
+            SCLogWarning(SC_WARN_DEPRECATED, "keyword '%s' is deprecated "
+                    "and will be removed soon. Use '%s' instead. "
+                    "See %s", st->name, sigmatch_table[st->alternative].name, URL);
+#undef URL
+    }
+
+    int setup_ret = 0;
+
     /* Validate double quoting, trimming trailing white space along the way. */
-    if (strlen(optvalue) > 0) {
+    if (optvalue != NULL && strlen(optvalue) > 0) {
         size_t ovlen = strlen(optvalue);
         char *ptr = optvalue;
 
@@ -719,7 +757,7 @@ static int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, char *optstr, 
         }
         /* if quoting is mandatory, enforce it */
         if (st->flags & SIGMATCH_QUOTES_MANDATORY && ovlen && *ptr != '"') {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "invalid formattingto %s keyword: "
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "invalid formatting to %s keyword: "
                     "value must be double quoted \'%s\'", optname, optstr);
             goto error;
         }
@@ -761,20 +799,29 @@ static int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, char *optstr, 
             }
         }
         /* setup may or may not add a new SigMatch to the list */
-        if (st->Setup(de_ctx, s, ptr) < 0) {
-            SCLogDebug("\"%s\" failed to setup", st->name);
-            goto error;
-        }
+        setup_ret = st->Setup(de_ctx, s, ptr);
     } else {
         /* setup may or may not add a new SigMatch to the list */
-        if (st->Setup(de_ctx, s, NULL) < 0) {
-            SCLogDebug("\"%s\" failed to setup", st->name);
-            goto error;
+        setup_ret = st->Setup(de_ctx, s, NULL);
+    }
+    if (setup_ret < 0) {
+        SCLogDebug("\"%s\" failed to setup", st->name);
+
+        /* handle 'silent' error case */
+        if (setup_ret == -2) {
+            enum DetectKeywordId idx = SigTableGetIndex(st);
+            if (de_ctx->sm_types_silent_error[idx] == false) {
+                de_ctx->sm_types_silent_error[idx] = true;
+                return -1;
+            }
+            return -2;
         }
+        return setup_ret;
     }
     s->init_data->negated = false;
 
-    if (ret == 4) {
+    if (strlen(optend) > 0) {
+        strlcpy(output, optend, output_size);
         return 1;
     }
 
@@ -798,14 +845,16 @@ static int SigParseAddress(DetectEngineCtx *de_ctx,
         if (strcasecmp(addrstr, "any") == 0)
             s->flags |= SIG_FLAG_SRC_ANY;
 
-        s->init_data->src = DetectParseAddress(de_ctx, addrstr);
+        s->init_data->src = DetectParseAddress(de_ctx, addrstr,
+                &s->init_data->src_contains_negation);
         if (s->init_data->src == NULL)
             goto error;
     } else {
         if (strcasecmp(addrstr, "any") == 0)
             s->flags |= SIG_FLAG_DST_ANY;
 
-        s->init_data->dst = DetectParseAddress(de_ctx, addrstr);
+        s->init_data->dst = DetectParseAddress(de_ctx, addrstr,
+                &s->init_data->dst_contains_negation);
         if (s->init_data->dst == NULL)
             goto error;
     }
@@ -844,7 +893,7 @@ static int SigParseProto(Signature *s, const char *protostr)
         else {
             SCLogError(SC_ERR_UNKNOWN_PROTOCOL, "protocol \"%s\" cannot be used "
                        "in a signature.  Either detection for this protocol "
-                       "supported yet OR detection has been disabled for "
+                       "is not yet supported OR detection has been disabled for "
                        "protocol through the yaml option "
                        "app-layer.protocols.%s.detection-enabled", protostr,
                        protostr);
@@ -974,40 +1023,139 @@ static int SigParseAction(Signature *s, const char *action)
 }
 
 /**
+ * \brief Parse the next token in rule.
+ *
+ * For rule parsing a token is considered to be a string of characters
+ * separated by white space.
+ *
+ * \param input double pointer to input buffer, will be advanced as input is
+ *     parsed.
+ * \param output buffer to copy token into.
+ * \param output_size length of output buffer.
+ */
+static inline int SigParseToken(char **input, char *output,
+    const size_t output_size)
+{
+    size_t len = *input == NULL ? 0 : strlen(*input);
+
+    if (!len) {
+        return 0;
+    }
+
+    while (len && isblank(**input)) {
+        (*input)++;
+        len--;
+    }
+
+    char *endptr = strpbrk(*input, " \t\n\r");
+    if (endptr != NULL) {
+        *(endptr++) = '\0';
+    }
+    strlcpy(output, *input, output_size);
+    *input = endptr;
+
+    return 1;
+}
+
+/**
+ * \brief Parse the next rule "list" token.
+ *
+ * Parses rule tokens that may be lists such as addresses and ports
+ * handling the case when they may not be lists.
+ *
+ * \param input ouble pointer to input buffer, will be advanced as input is
+ *     parsed.
+ * \param output buffer to copy token into.
+ * \param output_size length of output buffer.
+ */
+static inline int SigParseList(char **input, char *output,
+    const size_t output_size)
+{
+    int in_list = 0;
+    size_t len = *input != NULL ? strlen(*input) : 0;
+
+    if (len == 0) {
+        return 0;
+    }
+
+    while (len && isblank(**input)) {
+        (*input)++;
+        len--;
+    }
+
+    size_t i = 0;
+    for (i = 0; i < len; i++) {
+        char c = (*input)[i];
+        if (c == '[') {
+            in_list++;
+        } else if (c == ']') {
+            in_list--;
+        } else if (c == ' ') {
+            if (!in_list) {
+                break;
+            }
+        }
+    }
+    if (i == len) {
+        *input = NULL;
+        return 0;
+    }
+    (*input)[i] = '\0';
+    strlcpy(output, *input, output_size);
+    *input = *input + i + 1;
+
+    return 1;
+}
+
+/**
  *  \internal
  *  \brief split a signature string into a few blocks for further parsing
  */
 static int SigParseBasics(DetectEngineCtx *de_ctx,
         Signature *s, const char *sigstr, SignatureParser *parser, uint8_t addrs_direction)
 {
-#define MAX_SUBSTRINGS 30
-    int ov[MAX_SUBSTRINGS];
-    int ret = 0;
+    char *index, dup[DETECT_MAX_RULE_SIZE];
 
-    ret = pcre_exec(config_pcre, config_pcre_extra, sigstr, strlen(sigstr), 0, 0, ov, MAX_SUBSTRINGS);
-    if (ret != 8 && ret != 9) {
-        SCLogDebug("pcre_exec failed: ret %" PRId32 ", sigstr \"%s\"", ret, sigstr);
+    strlcpy(dup, sigstr, DETECT_MAX_RULE_SIZE);
+    index = dup;
+
+    /* Action. */
+    SigParseToken(&index, parser->action, sizeof(parser->action));
+
+    /* Protocol. */
+    SigParseList(&index, parser->protocol, sizeof(parser->protocol));
+
+    /* Source. */
+    SigParseList(&index, parser->src, sizeof(parser->src));
+
+    /* Source port(s). */
+    SigParseList(&index, parser->sp, sizeof(parser->sp));
+
+    /* Direction. */
+    SigParseToken(&index, parser->direction, sizeof(parser->direction));
+
+    /* Destination. */
+    SigParseList(&index, parser->dst, sizeof(parser->dst));
+
+    /* Destination port(s). */
+    SigParseList(&index, parser->dp, sizeof(parser->dp));
+
+    /* Options. */
+    if (index == NULL) {
+        SCLogError(SC_ERR_INVALID_RULE_ARGUMENT, "no rule options.");
         goto error;
     }
-
-    if (pcre_copy_substring(sigstr, ov, MAX_SUBSTRINGS, 1, parser->action, sizeof(parser->action)) < 0)
-        goto error;
-    if (pcre_copy_substring(sigstr, ov, MAX_SUBSTRINGS, 2, parser->protocol, sizeof(parser->protocol)) < 0)
-        goto error;
-    if (pcre_copy_substring(sigstr, ov, MAX_SUBSTRINGS, 3, parser->src, sizeof(parser->src)) < 0)
-        goto error;
-    if (pcre_copy_substring(sigstr, ov, MAX_SUBSTRINGS, 4, parser->sp, sizeof(parser->sp)) < 0)
-        goto error;
-    if (pcre_copy_substring(sigstr, ov, MAX_SUBSTRINGS, 5, parser->direction, sizeof(parser->direction)) < 0)
-        goto error;
-    if (pcre_copy_substring(sigstr, ov, MAX_SUBSTRINGS, 6, parser->dst, sizeof(parser->dst)) < 0)
-        goto error;
-    if (pcre_copy_substring(sigstr, ov, MAX_SUBSTRINGS, 7, parser->dp, sizeof(parser->dp)) < 0)
-        goto error;
-    if (ret == 9) {
-        if (pcre_copy_substring(sigstr, ov, MAX_SUBSTRINGS, 8, parser->opts, sizeof(parser->opts)) < 0)
-            goto error;
+    while (isspace(*index) || *index == '(') {
+        index++;
     }
+    for (size_t i = strlen(index); i > 0; i--) {
+        if (isspace(index[i - 1]) || index[i - 1] == ')') {
+            index[i - 1] = '\0';
+        } else {
+            break;
+        }
+    }
+    strlcpy(parser->opts, index, sizeof(parser->opts));
 
     /* Parse Action */
     if (SigParseAction(s, parser->action) < 0)
@@ -1016,26 +1164,20 @@ static int SigParseBasics(DetectEngineCtx *de_ctx,
     if (SigParseProto(s, parser->protocol) < 0)
         goto error;
 
-    if (strcmp(parser->direction, "<-") == 0) {
-        SCLogError(SC_ERR_INVALID_DIRECTION, "\"<-\" is not a valid direction modifier, \"->\" and \"<>\" are supported.");
+    if (strcmp(parser->direction, "<>") == 0) {
+        s->init_data->init_flags |= SIG_FLAG_INIT_BIDIREC;
+    } else if (strcmp(parser->direction, "->") != 0) {
+        SCLogError(SC_ERR_INVALID_DIRECTION,
+                "\"%s\" is not a valid direction modifier, "
+                "\"->\" and \"<>\" are supported.", parser->direction);
         goto error;
     }
-    /* Check if it is bidirectional */
-    if (strcmp(parser->direction, "<>") == 0)
-        s->init_data->init_flags |= SIG_FLAG_INIT_BIDIREC;
 
     /* Parse Address & Ports */
     if (SigParseAddress(de_ctx, s, parser->src, SIG_DIREC_SRC ^ addrs_direction) < 0)
        goto error;
 
     if (SigParseAddress(de_ctx, s, parser->dst, SIG_DIREC_DST ^ addrs_direction) < 0)
-        goto error;
-
-    /* For IPOnly */
-    if (IPOnlySigParseAddress(de_ctx, s, parser->src, SIG_DIREC_SRC ^ addrs_direction) < 0)
-        goto error;
-
-    if (IPOnlySigParseAddress(de_ctx, s, parser->dst, SIG_DIREC_DST ^ addrs_direction) < 0)
         goto error;
 
     /* By AWS - Traditionally we should be doing this only for tcp/udp/sctp,
@@ -1064,28 +1206,29 @@ error:
  *  \param -1 parse error
  *  \param 0 ok
  */
-int SigParse(DetectEngineCtx *de_ctx, Signature *s, const char *sigstr, uint8_t addrs_direction)
+static int SigParse(DetectEngineCtx *de_ctx, Signature *s,
+        const char *sigstr, uint8_t addrs_direction, SignatureParser *parser)
 {
     SCEnter();
 
-    SignatureParser parser;
-    memset(&parser, 0x00, sizeof(parser));
+    s->sig_str = SCStrdup(sigstr);
+    if (unlikely(s->sig_str == NULL)) {
+        SCReturnInt(-1);
+    }
 
-    s->sig_str = sigstr;
-
-    int ret = SigParseBasics(de_ctx, s, sigstr, &parser, addrs_direction);
+    int ret = SigParseBasics(de_ctx, s, sigstr, parser, addrs_direction);
     if (ret < 0) {
         SCLogDebug("SigParseBasics failed");
         SCReturnInt(-1);
     }
 
     /* we can have no options, so make sure we have them */
-    if (strlen(parser.opts) > 0) {
-        size_t buffer_size = strlen(parser.opts) + 1;
+    if (strlen(parser->opts) > 0) {
+        size_t buffer_size = strlen(parser->opts) + 1;
         char input[buffer_size];
         char output[buffer_size];
         memset(input, 0x00, buffer_size);
-        memcpy(input, parser.opts, strlen(parser.opts)+1);
+        memcpy(input, parser->opts, strlen(parser->opts)+1);
 
         /* loop the option parsing. Each run processes one option
          * and returns the rest of the option string through the
@@ -1099,8 +1242,6 @@ int SigParse(DetectEngineCtx *de_ctx, Signature *s, const char *sigstr, uint8_t 
 
         } while (ret == 1);
     }
-
-    s->sig_str = NULL;
 
     DetectIPProtoRemoveAllSMs(s);
 
@@ -1119,16 +1260,17 @@ Signature *SigAlloc (void)
         SCFree(sig);
         return NULL;
     }
-    int lists = DetectBufferTypeMaxId();
-    SCLogDebug("smlists size %d", lists);
-    sig->init_data->smlists = SCCalloc(lists, sizeof(SigMatch *));
+
+    sig->init_data->smlists_array_size = DetectBufferTypeMaxId();
+    SCLogDebug("smlists size %u", sig->init_data->smlists_array_size);
+    sig->init_data->smlists = SCCalloc(sig->init_data->smlists_array_size, sizeof(SigMatch *));
     if (sig->init_data->smlists == NULL) {
         SCFree(sig->init_data);
         SCFree(sig);
         return NULL;
     }
 
-    sig->init_data->smlists_tail = SCCalloc(lists, sizeof(SigMatch *));
+    sig->init_data->smlists_tail = SCCalloc(sig->init_data->smlists_array_size, sizeof(SigMatch *));
     if (sig->init_data->smlists_tail == NULL) {
         SCFree(sig->init_data->smlists_tail);
         SCFree(sig->init_data);
@@ -1143,6 +1285,36 @@ Signature *SigAlloc (void)
 
     sig->init_data->list = DETECT_SM_LIST_NOTSET;
     return sig;
+}
+
+/**
+ * \internal
+ * \brief Free Medadata list
+ *
+ * \param s Pointer to the signature
+ */
+static void SigMetadataFree(Signature *s)
+{
+    SCEnter();
+
+    DetectMetadata *mdata = NULL;
+    DetectMetadata *next_mdata = NULL;
+
+    if (s == NULL) {
+        SCReturn;
+    }
+
+    SCLogDebug("s %p, s->metadata %p", s, s->metadata);
+
+    for (mdata = s->metadata; mdata != NULL;)   {
+        next_mdata = mdata->next;
+        DetectMetadataFree(mdata);
+        mdata = next_mdata;
+    }
+
+    s->metadata = NULL;
+
+    SCReturn;
 }
 
 /**
@@ -1201,8 +1373,6 @@ static void SigMatchFreeArrays(Signature *s, int ctxs)
 
 void SigFree(Signature *s)
 {
-    const int nlists = DetectBufferTypeMaxId();
-
     if (s == NULL)
         return;
 
@@ -1214,6 +1384,7 @@ void SigFree(Signature *s)
 
     int i;
     if (s->init_data) {
+        const int nlists = s->init_data->smlists_array_size;
         for (i = 0; i < nlists; i++) {
             SigMatch *sm = s->init_data->smlists[i];
             while (sm != NULL) {
@@ -1232,10 +1403,10 @@ void SigFree(Signature *s)
     }
 
     if (s->sp != NULL) {
-        DetectPortCleanupList(s->sp);
+        DetectPortCleanupList(NULL, s->sp);
     }
     if (s->dp != NULL) {
-        DetectPortCleanupList(s->dp);
+        DetectPortCleanupList(NULL, s->dp);
     }
 
     if (s->msg != NULL)
@@ -1253,12 +1424,33 @@ void SigFree(Signature *s)
     if (s->addr_dst_match6 != NULL) {
         SCFree(s->addr_dst_match6);
     }
+    if (s->sig_str != NULL) {
+        SCFree(s->sig_str);
+    }
 
     SigRefFree(s);
+    SigMetadataFree(s);
 
     DetectEngineAppInspectionEngineSignatureFree(s);
 
     SCFree(s);
+}
+
+int DetectSignatureAddTransform(Signature *s, int transform)
+{
+    /* we only support buffers */
+    if (s->init_data->list == 0) {
+        SCReturnInt(-1);
+    }
+    if (!s->init_data->list_set) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "transforms must directly follow stickybuffers");
+        SCReturnInt(-1);
+    }
+    if (s->init_data->transform_cnt >= DETECT_TRANSFORMS_MAX) {
+        SCReturnInt(-1);
+    }
+    s->init_data->transforms[s->init_data->transform_cnt++] = transform;
+    SCReturnInt(0);
 }
 
 int DetectSignatureSetAppProto(Signature *s, AppProto alproto)
@@ -1303,8 +1495,8 @@ static void SigBuildAddressMatchArray(Signature *s)
         }
 
         for (da = s->init_data->src->ipv4_head; da != NULL; da = da->next) {
-            s->addr_src_match4[idx].ip = ntohl(da->ip.addr_data32[0]);
-            s->addr_src_match4[idx].ip2 = ntohl(da->ip2.addr_data32[0]);
+            s->addr_src_match4[idx].ip = SCNtohl(da->ip.addr_data32[0]);
+            s->addr_src_match4[idx].ip2 = SCNtohl(da->ip2.addr_data32[0]);
             idx++;
         }
         s->addr_src_match4_cnt = cnt;
@@ -1324,8 +1516,8 @@ static void SigBuildAddressMatchArray(Signature *s)
         }
 
         for (da = s->init_data->dst->ipv4_head; da != NULL; da = da->next) {
-            s->addr_dst_match4[idx].ip = ntohl(da->ip.addr_data32[0]);
-            s->addr_dst_match4[idx].ip2 = ntohl(da->ip2.addr_data32[0]);
+            s->addr_dst_match4[idx].ip = SCNtohl(da->ip.addr_data32[0]);
+            s->addr_dst_match4[idx].ip2 = SCNtohl(da->ip2.addr_data32[0]);
             idx++;
         }
         s->addr_dst_match4_cnt = cnt;
@@ -1345,14 +1537,14 @@ static void SigBuildAddressMatchArray(Signature *s)
         }
 
         for (da = s->init_data->src->ipv6_head; da != NULL; da = da->next) {
-            s->addr_src_match6[idx].ip[0] = ntohl(da->ip.addr_data32[0]);
-            s->addr_src_match6[idx].ip[1] = ntohl(da->ip.addr_data32[1]);
-            s->addr_src_match6[idx].ip[2] = ntohl(da->ip.addr_data32[2]);
-            s->addr_src_match6[idx].ip[3] = ntohl(da->ip.addr_data32[3]);
-            s->addr_src_match6[idx].ip2[0] = ntohl(da->ip2.addr_data32[0]);
-            s->addr_src_match6[idx].ip2[1] = ntohl(da->ip2.addr_data32[1]);
-            s->addr_src_match6[idx].ip2[2] = ntohl(da->ip2.addr_data32[2]);
-            s->addr_src_match6[idx].ip2[3] = ntohl(da->ip2.addr_data32[3]);
+            s->addr_src_match6[idx].ip[0] = SCNtohl(da->ip.addr_data32[0]);
+            s->addr_src_match6[idx].ip[1] = SCNtohl(da->ip.addr_data32[1]);
+            s->addr_src_match6[idx].ip[2] = SCNtohl(da->ip.addr_data32[2]);
+            s->addr_src_match6[idx].ip[3] = SCNtohl(da->ip.addr_data32[3]);
+            s->addr_src_match6[idx].ip2[0] = SCNtohl(da->ip2.addr_data32[0]);
+            s->addr_src_match6[idx].ip2[1] = SCNtohl(da->ip2.addr_data32[1]);
+            s->addr_src_match6[idx].ip2[2] = SCNtohl(da->ip2.addr_data32[2]);
+            s->addr_src_match6[idx].ip2[3] = SCNtohl(da->ip2.addr_data32[3]);
             idx++;
         }
         s->addr_src_match6_cnt = cnt;
@@ -1372,14 +1564,14 @@ static void SigBuildAddressMatchArray(Signature *s)
         }
 
         for (da = s->init_data->dst->ipv6_head; da != NULL; da = da->next) {
-            s->addr_dst_match6[idx].ip[0] = ntohl(da->ip.addr_data32[0]);
-            s->addr_dst_match6[idx].ip[1] = ntohl(da->ip.addr_data32[1]);
-            s->addr_dst_match6[idx].ip[2] = ntohl(da->ip.addr_data32[2]);
-            s->addr_dst_match6[idx].ip[3] = ntohl(da->ip.addr_data32[3]);
-            s->addr_dst_match6[idx].ip2[0] = ntohl(da->ip2.addr_data32[0]);
-            s->addr_dst_match6[idx].ip2[1] = ntohl(da->ip2.addr_data32[1]);
-            s->addr_dst_match6[idx].ip2[2] = ntohl(da->ip2.addr_data32[2]);
-            s->addr_dst_match6[idx].ip2[3] = ntohl(da->ip2.addr_data32[3]);
+            s->addr_dst_match6[idx].ip[0] = SCNtohl(da->ip.addr_data32[0]);
+            s->addr_dst_match6[idx].ip[1] = SCNtohl(da->ip.addr_data32[1]);
+            s->addr_dst_match6[idx].ip[2] = SCNtohl(da->ip.addr_data32[2]);
+            s->addr_dst_match6[idx].ip[3] = SCNtohl(da->ip.addr_data32[3]);
+            s->addr_dst_match6[idx].ip2[0] = SCNtohl(da->ip2.addr_data32[0]);
+            s->addr_dst_match6[idx].ip2[1] = SCNtohl(da->ip2.addr_data32[1]);
+            s->addr_dst_match6[idx].ip2[2] = SCNtohl(da->ip2.addr_data32[2]);
+            s->addr_dst_match6[idx].ip2[3] = SCNtohl(da->ip2.addr_data32[3]);
             idx++;
         }
         s->addr_dst_match6_cnt = cnt;
@@ -1434,10 +1626,20 @@ SigMatchData* SigMatchList2DataArray(SigMatch *head)
 static int SigValidate(DetectEngineCtx *de_ctx, Signature *s)
 {
     uint32_t sig_flags = 0;
-    SigMatch *sm, *pm;
-    const int nlists = DetectBufferTypeMaxId();
+    SigMatch *sm;
+    const int nlists = s->init_data->smlists_array_size;
 
     SCEnter();
+
+    /* check for sticky buffers that were set w/o matches
+     * e.g. alert ... (file_data; sid:1;) */
+    if (s->init_data->list != DETECT_SM_LIST_NOTSET) {
+        if (s->init_data->smlists[s->init_data->list] == NULL) {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "rule %u setup buffer %s but didn't add matches to it",
+                    s->id, DetectBufferTypeGetNameById(de_ctx, s->init_data->list));
+            SCReturnInt(0);
+        }
+    }
 
     /* run buffer type validation callbacks if any */
     if (s->init_data->smlists[DETECT_SM_LIST_PMATCH]) {
@@ -1445,13 +1647,63 @@ static int SigValidate(DetectEngineCtx *de_ctx, Signature *s)
             SCReturnInt(0);
     }
 
+    struct BufferVsDir {
+        int ts;
+        int tc;
+    } bufdir[nlists];
+    memset(&bufdir, 0, nlists * sizeof(struct BufferVsDir));
+
     int x;
     for (x = 0; x < nlists; x++) {
         if (s->init_data->smlists[x]) {
-            if (DetectBufferRunValidateCallback(x, s) == FALSE) {
+            const DetectEngineAppInspectionEngine *app = de_ctx->app_inspect_engines;
+            for ( ; app != NULL; app = app->next) {
+                if (app->sm_list == x && ((s->alproto == app->alproto) || s->alproto == 0)) {
+                    SCLogDebug("engine %s dir %d alproto %d",
+                            DetectBufferTypeGetNameById(de_ctx, app->sm_list),
+                            app->dir, app->alproto);
+
+                    bufdir[x].ts += (app->dir == 0);
+                    bufdir[x].tc += (app->dir == 1);
+                }
+            }
+
+            if (DetectBufferRunValidateCallback(de_ctx, x, s, &de_ctx->sigerror) == FALSE) {
                 SCReturnInt(0);
             }
         }
+    }
+
+    int ts_excl = 0;
+    int tc_excl = 0;
+    int dir_amb = 0;
+    for (x = 0; x < nlists; x++) {
+        if (bufdir[x].ts == 0 && bufdir[x].tc == 0)
+            continue;
+        ts_excl += (bufdir[x].ts > 0 && bufdir[x].tc == 0);
+        tc_excl += (bufdir[x].ts == 0 && bufdir[x].tc > 0);
+        dir_amb += (bufdir[x].ts > 0 && bufdir[x].tc > 0);
+
+        SCLogDebug("%s/%d: %d/%d", DetectBufferTypeGetNameById(de_ctx, x),
+                x, bufdir[x].ts, bufdir[x].tc);
+    }
+    if (ts_excl && tc_excl) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "rule %u mixes keywords with conflicting directions", s->id);
+        SCReturnInt(0);
+    } else if (ts_excl) {
+        SCLogDebug("%u: implied rule direction is toserver", s->id);
+        if (DetectFlowSetupImplicit(s, SIG_FLAG_TOSERVER) < 0) {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "rule %u mixes keywords with conflicting directions", s->id);
+            SCReturnInt(0);
+        }
+    } else if (tc_excl) {
+        SCLogDebug("%u: implied rule direction is toclient", s->id);
+        if (DetectFlowSetupImplicit(s, SIG_FLAG_TOCLIENT) < 0) {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "rule %u mixes keywords with conflicting directions", s->id);
+            SCReturnInt(0);
+        }
+    } else if (dir_amb) {
+        SCLogDebug("%u: rule direction cannot be deduced from keywords", s->id);
     }
 
     if ((s->flags & SIG_FLAG_REQUIRE_PACKET) &&
@@ -1486,61 +1738,14 @@ static int SigValidate(DetectEngineCtx *de_ctx, Signature *s)
         SCReturnInt(0);
     }
 
-    //if (s->alproto != ALPROTO_UNKNOWN) {
-    //    if (s->flags & SIG_FLAG_STATE_MATCH) {
-    //        if (s->alproto == ALPROTO_DNS) {
-    //            if (al_proto_table[ALPROTO_DNS_UDP].to_server == 0 ||
-    //                al_proto_table[ALPROTO_DNS_UDP].to_client == 0 ||
-    //                al_proto_table[ALPROTO_DNS_TCP].to_server == 0 ||
-    //                al_proto_table[ALPROTO_DNS_TCP].to_client == 0) {
-    //                SCLogInfo("Signature uses options that need the app layer "
-    //                          "parser for dns, but the parser's disabled "
-    //                          "for the protocol.  Please check if you have "
-    //                          "disabled it through the option "
-    //                          "\"app-layer.protocols.dcerpc[udp|tcp].enabled\""
-    //                          "or internally the parser has been disabled in "
-    //                          "the code.  Invalidating signature.");
-    //                SCReturnInt(0);
-    //            }
-    //        } else {
-    //            if (al_proto_table[s->alproto].to_server == 0 ||
-    //                al_proto_table[s->alproto].to_client == 0) {
-    //                const char *proto_name = AppProtoToString(s->alproto);
-    //                SCLogInfo("Signature uses options that need the app layer "
-    //                          "parser for \"%s\", but the parser's disabled "
-    //                          "for the protocol.  Please check if you have "
-    //                          "disabled it through the option "
-    //                          "\"app-layer.protocols.%s.enabled\" or internally "
-    //                          "there the parser has been disabled in the code.   "
-    //                          "Invalidating signature.", proto_name, proto_name);
-    //                SCReturnInt(0);
-    //            }
-    //        }
-    //    }
-    //
-    //
-    //
-    //
-    //
-    //}
-
     if (s->flags & SIG_FLAG_REQUIRE_PACKET) {
-        pm = DetectGetLastSMFromLists(s, DETECT_REPLACE, -1);
-        if (pm != NULL && SigMatchListSMBelongsTo(s, pm) != DETECT_SM_LIST_PMATCH) {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "Signature has"
-                " replace keyword linked with a modified content"
-                " keyword (http_*, dce_*). It only supports content on"
-                " raw payload");
-            SCReturnInt(0);
-        }
-
         for (int i = 0; i < nlists; i++) {
             if (s->init_data->smlists[i] == NULL)
                 continue;
-            if (!(DetectBufferTypeGetNameById(i)))
+            if (!(DetectBufferTypeGetNameById(de_ctx, i)))
                 continue;
 
-            if (!(DetectBufferTypeSupportsPacketGetById(i))) {
+            if (!(DetectBufferTypeSupportsPacketGetById(de_ctx, i))) {
                 SCLogError(SC_ERR_INVALID_SIGNATURE, "Signature combines packet "
                         "specific matches (like dsize, flags, ttl) with stream / "
                         "state matching by matching on app layer proto (like using "
@@ -1550,19 +1755,33 @@ static int SigValidate(DetectEngineCtx *de_ctx, Signature *s)
         }
     }
 
-    /* TCP: pkt vs stream vs depth/offset */
+    /* TCP: corner cases:
+     * - pkt vs stream vs depth/offset
+     * - pkt vs stream vs stream_size
+     */
     if (s->proto.proto[IPPROTO_TCP / 8] & (1 << (IPPROTO_TCP % 8))) {
-        if (!(s->flags & (SIG_FLAG_REQUIRE_PACKET | SIG_FLAG_REQUIRE_STREAM))) {
-            s->flags |= SIG_FLAG_REQUIRE_STREAM;
-            sm = s->init_data->smlists[DETECT_SM_LIST_PMATCH];
-            while (sm != NULL) {
-                if (sm->type == DETECT_CONTENT &&
-                        (((DetectContentData *)(sm->ctx))->flags &
-                         (DETECT_CONTENT_DEPTH | DETECT_CONTENT_OFFSET))) {
-                    s->flags |= SIG_FLAG_REQUIRE_PACKET;
-                    break;
+        if (s->init_data->smlists[DETECT_SM_LIST_PMATCH]) {
+            if (!(s->flags & (SIG_FLAG_REQUIRE_PACKET | SIG_FLAG_REQUIRE_STREAM))) {
+                s->flags |= SIG_FLAG_REQUIRE_STREAM;
+                sm = s->init_data->smlists[DETECT_SM_LIST_PMATCH];
+                while (sm != NULL) {
+                    if (sm->type == DETECT_CONTENT &&
+                            (((DetectContentData *)(sm->ctx))->flags &
+                             (DETECT_CONTENT_DEPTH | DETECT_CONTENT_OFFSET))) {
+                        s->flags |= SIG_FLAG_REQUIRE_PACKET;
+                        break;
+                    }
+                    sm = sm->next;
                 }
-                sm = sm->next;
+                /* if stream_size is in use, also inspect packets */
+                sm = s->init_data->smlists[DETECT_SM_LIST_MATCH];
+                while (sm != NULL) {
+                    if (sm->type == DETECT_STREAM_SIZE) {
+                        s->flags |= SIG_FLAG_REQUIRE_PACKET;
+                        break;
+                    }
+                    sm = sm->next;
+                }
             }
         }
     }
@@ -1630,6 +1849,9 @@ static int SigValidate(DetectEngineCtx *de_ctx, Signature *s)
 static Signature *SigInitHelper(DetectEngineCtx *de_ctx, const char *sigstr,
                                 uint8_t dir)
 {
+    SignatureParser parser;
+    memset(&parser, 0x00, sizeof(parser));
+
     Signature *sig = SigAlloc();
     if (sig == NULL)
         goto error;
@@ -1637,12 +1859,17 @@ static Signature *SigInitHelper(DetectEngineCtx *de_ctx, const char *sigstr,
     /* default gid to 1 */
     sig->gid = 1;
 
-    if (SigParse(de_ctx, sig, sigstr, dir) < 0)
+    int ret = SigParse(de_ctx, sig, sigstr, dir, &parser);
+    if (ret == -2) {
+        de_ctx->sigerror_silent = true;
         goto error;
+    } else if (ret < 0) {
+        goto error;
+    }
 
     /* signature priority hasn't been overwritten.  Using default priority */
     if (sig->prio == -1)
-        sig->prio = 3;
+        sig->prio = DETECT_DEFAULT_PRIO;
 
     sig->num = de_ctx->signum;
     de_ctx->signum++;
@@ -1690,8 +1917,10 @@ static Signature *SigInitHelper(DetectEngineCtx *de_ctx, const char *sigstr,
     }
 
     if (!(sig->init_data->init_flags & SIG_FLAG_INIT_FLOW)) {
-        sig->flags |= SIG_FLAG_TOSERVER;
-        sig->flags |= SIG_FLAG_TOCLIENT;
+        if ((sig->flags & (SIG_FLAG_TOSERVER|SIG_FLAG_TOCLIENT)) == 0) {
+            sig->flags |= SIG_FLAG_TOSERVER;
+            sig->flags |= SIG_FLAG_TOCLIENT;
+        }
     }
 
     SCLogDebug("sig %"PRIu32" SIG_FLAG_APPLAYER: %s, SIG_FLAG_PACKET: %s",
@@ -1700,11 +1929,28 @@ static Signature *SigInitHelper(DetectEngineCtx *de_ctx, const char *sigstr,
 
     SigBuildAddressMatchArray(sig);
 
+    /* run buffer type callbacks if any */
+    for (uint32_t x = 0; x < sig->init_data->smlists_array_size; x++) {
+        if (sig->init_data->smlists[x])
+            DetectBufferRunSetupCallback(de_ctx, x, sig);
+    }
+
     /* validate signature, SigValidate will report the error reason */
     if (SigValidate(de_ctx, sig) == 0) {
         goto error;
     }
 
+    /* check what the type of this sig is */
+    SignatureSetType(de_ctx, sig);
+
+    if (sig->flags & SIG_FLAG_IPONLY) {
+        /* For IPOnly */
+        if (IPOnlySigParseAddress(de_ctx, sig, parser.src, SIG_DIREC_SRC ^ dir) < 0)
+            goto error;
+
+        if (IPOnlySigParseAddress(de_ctx, sig, parser.dst, SIG_DIREC_DST ^ dir) < 0)
+            goto error;
+    }
     return sig;
 
 error:
@@ -1712,6 +1958,39 @@ error:
         SigFree(sig);
     }
     return NULL;
+}
+
+/**
+ * \brief Checks if a signature has the same source and destination
+ * \param s parsed signature
+ *
+ *  \retval true if source and destination are the same, false otherwise
+ */
+static bool SigHasSameSourceAndDestination(const Signature *s)
+{
+    if (!(s->flags & SIG_FLAG_SP_ANY) || !(s->flags & SIG_FLAG_DP_ANY)) {
+        if (!DetectPortListsAreEqual(s->sp, s->dp)) {
+            return false;
+        }
+    }
+
+    if (!(s->flags & SIG_FLAG_SRC_ANY) || !(s->flags & SIG_FLAG_DST_ANY)) {
+        DetectAddress *src = s->init_data->src->ipv4_head;
+        DetectAddress *dst = s->init_data->dst->ipv4_head;
+
+        if (!DetectAddressListsAreEqual(src, dst)) {
+            return false;
+        }
+
+        src = s->init_data->src->ipv6_head;
+        dst = s->init_data->dst->ipv6_head;
+
+        if (!DetectAddressListsAreEqual(src, dst)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 /**
@@ -1728,6 +2007,7 @@ Signature *SigInit(DetectEngineCtx *de_ctx, const char *sigstr)
     SCEnter();
 
     uint32_t oldsignum = de_ctx->signum;
+    de_ctx->sigerror_silent = false;
 
     Signature *sig;
 
@@ -1736,9 +2016,16 @@ Signature *SigInit(DetectEngineCtx *de_ctx, const char *sigstr)
     }
 
     if (sig->init_data->init_flags & SIG_FLAG_INIT_BIDIREC) {
-        sig->next = SigInitHelper(de_ctx, sigstr, SIG_DIREC_SWITCHED);
-        if (sig->next == NULL) {
-            goto error;
+        if (SigHasSameSourceAndDestination(sig)) {
+            SCLogInfo("Rule with ID %u is bidirectional, but source and destination are the same, "
+                "treating the rule as unidirectional", sig->id);
+
+            sig->init_data->init_flags &= ~SIG_FLAG_INIT_BIDIREC;
+        } else {
+            sig->next = SigInitHelper(de_ctx, sigstr, SIG_DIREC_SWITCHED);
+            if (sig->next == NULL) {
+                goto error;
+            }
         }
     }
 
@@ -1967,6 +2254,18 @@ static inline int DetectEngineSignatureIsDuplicate(DetectEngineCtx *de_ctx,
     sw_dup->s = sig;
     sw_dup->s_prev = NULL;
 
+    if (de_ctx->sig_list != NULL) {
+        SigDuplWrapper sw_tmp;
+        memset(&sw_tmp, 0, sizeof(SigDuplWrapper));
+        sw_tmp.s = de_ctx->sig_list;
+        SigDuplWrapper *sw_old = HashListTableLookup(de_ctx->dup_sig_hash_table,
+                                                     (void *)&sw_tmp, 0);
+        if (sw_old->s != sw_dup->s) {
+            // Link on top of the list if there was another element
+            sw_old->s_prev = sig;
+        }
+    }
+
     /* this is duplicate, but a duplicate that replaced the existing sig entry */
     ret = 2;
 
@@ -2112,7 +2411,6 @@ int RuleParseDataFromFile(char *filename)
     char buffer[65536];
 
     SigTableSetup();
-    SigParsePrepare();
     SCReferenceConfInit();
     SCClassConfInit();
 
@@ -2204,9 +2502,12 @@ static int SigParseTest02 (void)
     }
 
 end:
-    if (port != NULL) DetectPortCleanupList(port);
-    if (sig != NULL) SigFree(sig);
-    if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
+    if (port != NULL)
+        DetectPortCleanupList(de_ctx, port);
+    if (sig != NULL)
+        SigFree(sig);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -2765,6 +3066,23 @@ end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
     return result;
+}
+
+/**
+ * \test rule ending in carriage return
+ */
+static int SigParseTest23(void)
+{
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+
+    Signature *s = NULL;
+
+    s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (content:\"abc\"; offset:1; depth:5; sid:1;)\r");
+    FAIL_IF_NULL(s);
+
+    DetectEngineCtxFree(de_ctx);
+    PASS;
 }
 
 /** \test Direction operator validation (invalid) */
@@ -3703,11 +4021,87 @@ static int SigParseTestContentGtDsize02(void)
     PASS;
 }
 
+static int SigParseBidirWithSameSrcAndDest01(void)
+{
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
+
+    Signature *s = SigInit(de_ctx,
+            "alert tcp any any <> any any (sid:1; rev:1;)");
+    FAIL_IF_NULL(s);
+    FAIL_IF_NOT_NULL(s->next);
+    FAIL_IF(s->init_data->init_flags & SIG_FLAG_INIT_BIDIREC);
+
+    SigFree(s);
+
+    s = SigInit(de_ctx,
+            "alert tcp any [80, 81] <> any [81, 80] (sid:1; rev:1;)");
+    FAIL_IF_NULL(s);
+    FAIL_IF_NOT_NULL(s->next);
+    FAIL_IF(s->init_data->init_flags & SIG_FLAG_INIT_BIDIREC);
+
+    SigFree(s);
+
+    s = SigInit(de_ctx,
+            "alert tcp [1.2.3.4, 5.6.7.8] [80, 81] <> [5.6.7.8, 1.2.3.4] [81, 80] (sid:1; rev:1;)");
+    FAIL_IF_NULL(s);
+    FAIL_IF_NOT_NULL(s->next);
+    FAIL_IF(s->init_data->init_flags & SIG_FLAG_INIT_BIDIREC);
+
+    SigFree(s);
+
+    PASS;
+}
+
+static int SigParseBidirWithSameSrcAndDest02(void)
+{
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
+
+    // Source is a subset of destination
+    Signature *s = SigInit(de_ctx,
+            "alert tcp 1.2.3.4 any <> [1.2.3.4, 5.6.7.8, ::1] any (sid:1; rev:1;)");
+    FAIL_IF_NULL(s);
+    FAIL_IF_NULL(s->next);
+    FAIL_IF_NOT(s->init_data->init_flags & SIG_FLAG_INIT_BIDIREC);
+
+    SigFree(s);
+
+    // Source is a subset of destinationn
+    s = SigInit(de_ctx,
+            "alert tcp [1.2.3.4, ::1] [80, 81, 82] <> [1.2.3.4, ::1] [80, 81] (sid:1; rev:1;)");
+    FAIL_IF_NULL(s);
+    FAIL_IF_NULL(s->next);
+    FAIL_IF_NOT(s->init_data->init_flags & SIG_FLAG_INIT_BIDIREC);
+
+    SigFree(s);
+
+    // Source intersects with destination
+    s = SigInit(de_ctx,
+            "alert tcp [1.2.3.4, ::1, ABCD:AAAA::1] [80] <> [1.2.3.4, ::1] [80, 81] (sid:1; rev:1;)");
+    FAIL_IF_NULL(s);
+    FAIL_IF_NULL(s->next);
+    FAIL_IF_NOT(s->init_data->init_flags & SIG_FLAG_INIT_BIDIREC);
+
+    SigFree(s);
+
+    PASS;
+}
+
 #endif /* UNITTESTS */
+
+#ifdef UNITTESTS
+void DetectParseRegisterTests (void);
+#include "tests/detect-parse.c"
+#endif
 
 void SigParseRegisterTests(void)
 {
 #ifdef UNITTESTS
+    DetectParseRegisterTests();
+
     UtRegisterTest("SigParseTest01", SigParseTest01);
     UtRegisterTest("SigParseTest02", SigParseTest02);
     UtRegisterTest("SigParseTest03", SigParseTest03);
@@ -3730,6 +4124,7 @@ void SigParseRegisterTests(void)
     UtRegisterTest("SigParseTest20", SigParseTest20);
     UtRegisterTest("SigParseTest21 -- address with space", SigParseTest21);
     UtRegisterTest("SigParseTest22 -- address with space", SigParseTest22);
+    UtRegisterTest("SigParseTest23 -- carriage return", SigParseTest23);
 
     UtRegisterTest("SigParseBidirecTest06", SigParseBidirecTest06);
     UtRegisterTest("SigParseBidirecTest07", SigParseBidirecTest07);
@@ -3764,5 +4159,10 @@ void SigParseRegisterTests(void)
             SigParseTestContentGtDsize01);
     UtRegisterTest("SigParseTestContentGtDsize02",
             SigParseTestContentGtDsize02);
+
+    UtRegisterTest("SigParseBidirWithSameSrcAndDest01",
+            SigParseBidirWithSameSrcAndDest01);
+    UtRegisterTest("SigParseBidirWithSameSrcAndDest02",
+            SigParseBidirWithSameSrcAndDest02);
 #endif /* UNITTESTS */
 }

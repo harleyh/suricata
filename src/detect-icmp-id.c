@@ -43,12 +43,12 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectIcmpIdMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+static int DetectIcmpIdMatch(DetectEngineThreadCtx *, Packet *,
         const Signature *, const SigMatchCtx *);
 static int DetectIcmpIdSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectIcmpIdRegisterTests(void);
 void DetectIcmpIdFree(void *);
-static int PrefilterSetupIcmpId(SigGroupHead *sgh);
+static int PrefilterSetupIcmpId(DetectEngineCtx *de_ctx, SigGroupHead *sgh);
 static _Bool PrefilterIcmpIdIsPrefilterable(const Signature *s);
 
 /**
@@ -57,7 +57,7 @@ static _Bool PrefilterIcmpIdIsPrefilterable(const Signature *s);
 void DetectIcmpIdRegister (void)
 {
     sigmatch_table[DETECT_ICMP_ID].name = "icmp_id";
-    sigmatch_table[DETECT_ICMP_ID].desc = "check for a ICMP id";
+    sigmatch_table[DETECT_ICMP_ID].desc = "check for a ICMP ID";
     sigmatch_table[DETECT_ICMP_ID].url = DOC_URL DOC_VERSION "/rules/header-keywords.html#icmp-id";
     sigmatch_table[DETECT_ICMP_ID].Match = DetectIcmpIdMatch;
     sigmatch_table[DETECT_ICMP_ID].Setup = DetectIcmpIdSetup;
@@ -88,7 +88,7 @@ static inline _Bool GetIcmpId(Packet *p, uint16_t *id)
             case ICMP_ADDRESSREPLY:
                 SCLogDebug("ICMPV4_GET_ID(p) %"PRIu16" (network byte order), "
                         "%"PRIu16" (host byte order)", ICMPV4_GET_ID(p),
-                        ntohs(ICMPV4_GET_ID(p)));
+                        SCNtohs(ICMPV4_GET_ID(p)));
 
                 pid = ICMPV4_GET_ID(p);
                 break;
@@ -102,7 +102,7 @@ static inline _Bool GetIcmpId(Packet *p, uint16_t *id)
             case ICMP6_ECHO_REPLY:
                 SCLogDebug("ICMPV6_GET_ID(p) %"PRIu16" (network byte order), "
                         "%"PRIu16" (host byte order)", ICMPV6_GET_ID(p),
-                        ntohs(ICMPV6_GET_ID(p)));
+                        SCNtohs(ICMPV6_GET_ID(p)));
 
                 pid = ICMPV6_GET_ID(p);
                 break;
@@ -130,7 +130,7 @@ static inline _Bool GetIcmpId(Packet *p, uint16_t *id)
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectIcmpIdMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+static int DetectIcmpIdMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
         const Signature *s, const SigMatchCtx *ctx)
 {
     uint16_t pid;
@@ -299,9 +299,9 @@ PrefilterPacketIcmpIdCompare(PrefilterPacketHeaderValue v, void *smctx)
     return FALSE;
 }
 
-static int PrefilterSetupIcmpId(SigGroupHead *sgh)
+static int PrefilterSetupIcmpId(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(sgh, DETECT_ICMP_ID,
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_ICMP_ID,
         PrefilterPacketIcmpIdSet,
         PrefilterPacketIcmpIdCompare,
         PrefilterPacketIcmpIdMatch);

@@ -41,6 +41,7 @@ Packet *UTHBuildPacketFromEth(uint8_t *, uint16_t);
 void UTHFreePacket(Packet *);
 void UTHFreePackets(Packet **, int);
 
+void UTHAssignFlow(Packet *p, Flow *f);
 Flow *UTHBuildFlow(int family, const char *src, const char *dst, Port sp, Port dp);
 void UTHFreeFlow(Flow *flow);
 int UTHAddStreamToFlow(Flow *f, int direction, uint8_t *data, uint32_t data_len);
@@ -59,6 +60,8 @@ int UTHGenericTest(Packet **, int, const char **, uint32_t *, uint32_t *, int);
 uint32_t UTHBuildPacketOfFlows(uint32_t, uint32_t, uint8_t);
 Packet *UTHBuildPacketIPV6Real(uint8_t *, uint16_t , uint8_t ipproto, const char *, const char *,
                            uint16_t , uint16_t );
+
+int UTHParseSignature(const char *str, bool expect);
 #endif
 
 void UTHRegisterTests(void);

@@ -43,7 +43,7 @@
  * \brief Function to decode ERSPAN packets
  */
 
-int DecodeERSPAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, uint16_t len, PacketQueue *pq)
+int DecodeERSPAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, const uint8_t *pkt, uint32_t len, PacketQueue *pq)
 {
     StatsIncr(tv, dtv->counter_erspan);
 
@@ -53,8 +53,8 @@ int DecodeERSPAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt,
     }
 
     const ErspanHdr *ehdr = (const ErspanHdr *)pkt;
-    uint16_t version = ntohs(ehdr->ver_vlan) >> 12;
-    uint16_t vlan_id = ntohs(ehdr->ver_vlan) & 0x0fff;
+    uint16_t version = SCNtohs(ehdr->ver_vlan) >> 12;
+    uint16_t vlan_id = SCNtohs(ehdr->ver_vlan) & 0x0fff;
 
     SCLogDebug("ERSPAN: version %u vlan %u", version, vlan_id);
 
@@ -64,7 +64,7 @@ int DecodeERSPAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt,
         return TM_ECODE_FAILED;
     }
 
-    if (vlan_id > 0 && dtv->vlan_disabled == 0) {
+    if (vlan_id > 0) {
         if (p->vlan_idx >= 2) {
             ENGINE_SET_EVENT(p,ERSPAN_TOO_MANY_VLAN_LAYERS);
             return TM_ECODE_FAILED;

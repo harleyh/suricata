@@ -56,7 +56,7 @@ int SCHSAddPatternCS(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t,
                      uint32_t, SigIntId, uint8_t);
 int SCHSPreparePatterns(MpmCtx *mpm_ctx);
 uint32_t SCHSSearch(const MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
-                    PrefilterRuleStore *pmq, const uint8_t *buf, const uint16_t buflen);
+                    PrefilterRuleStore *pmq, const uint8_t *buf, const uint32_t buflen);
 void SCHSPrintInfo(MpmCtx *mpm_ctx);
 void SCHSPrintSearchStats(MpmThreadCtx *mpm_thread_ctx);
 void SCHSRegisterTests(void);
@@ -312,6 +312,17 @@ static int SCHSAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
         SCHSInitHashAdd(ctx, p);
 
         mpm_ctx->pattern_cnt++;
+
+        if (!(mpm_ctx->flags & MPMCTX_FLAGS_NODEPTH)) {
+            if (depth) {
+                mpm_ctx->maxdepth = MAX(mpm_ctx->maxdepth, depth);
+                SCLogDebug("%p: depth %u max %u", mpm_ctx, depth, mpm_ctx->maxdepth);
+            } else {
+                mpm_ctx->flags |= MPMCTX_FLAGS_NODEPTH;
+                mpm_ctx->maxdepth = 0;
+                SCLogDebug("%p: alas, no depth for us", mpm_ctx);
+            }
+        }
 
         if (mpm_ctx->maxlen < patlen)
             mpm_ctx->maxlen = patlen;
@@ -716,8 +727,10 @@ int SCHSPreparePatterns(MpmCtx *mpm_ctx)
 
     /* Cache this database globally for later. */
     pd->ref_cnt = 1;
-    HashTableAdd(g_db_table, pd, 1);
+    int r = HashTableAdd(g_db_table, pd, 1);
     SCMutexUnlock(&g_db_table_mutex);
+    if (r < 0)
+        goto error;
 
     SCHSFreeCompileData(cd);
     return 0;
@@ -915,7 +928,7 @@ static int SCHSMatchEvent(unsigned int id, unsigned long long from,
  * \retval matches Match count.
  */
 uint32_t SCHSSearch(const MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
-                    PrefilterRuleStore *pmq, const uint8_t *buf, const uint16_t buflen)
+                    PrefilterRuleStore *pmq, const uint8_t *buf, const uint32_t buflen)
 {
     uint32_t ret = 0;
     SCHSCtx *ctx = (SCHSCtx *)mpm_ctx->ctx;

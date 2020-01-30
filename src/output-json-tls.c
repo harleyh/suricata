@@ -46,20 +46,15 @@
 
 #include "util-logopenfile.h"
 #include "util-crypt.h"
+#include "util-ja3.h"
 
 #include "output-json.h"
 #include "output-json-tls.h"
-
-#ifdef HAVE_LIBJANSSON
 
 SC_ATOMIC_DECLARE(unsigned int, cert_id);
 
 #define MODULE_NAME "LogTlsLog"
 #define DEFAULT_LOG_FILENAME "tls.json"
-
-#define OUTPUT_BUFFER_SIZE 65535
-
-#define SSL_VERSION_LENGTH 13
 
 #define LOG_TLS_DEFAULT                 0
 #define LOG_TLS_EXTENDED                (1 << 0)
@@ -77,6 +72,8 @@ SC_ATOMIC_DECLARE(unsigned int, cert_id);
 #define LOG_TLS_FIELD_CERTIFICATE       (1 << 8)
 #define LOG_TLS_FIELD_CHAIN             (1 << 9)
 #define LOG_TLS_FIELD_SESSION_RESUMED   (1 << 10)
+#define LOG_TLS_FIELD_JA3               (1 << 11)
+#define LOG_TLS_FIELD_JA3S              (1 << 12)
 
 typedef struct {
     const char *name;
@@ -95,6 +92,8 @@ TlsFields tls_fields[] = {
     { "certificate",     LOG_TLS_FIELD_CERTIFICATE },
     { "chain",           LOG_TLS_FIELD_CHAIN },
     { "session_resumed", LOG_TLS_FIELD_SESSION_RESUMED },
+    { "ja3",             LOG_TLS_FIELD_JA3 },
+    { "ja3s",            LOG_TLS_FIELD_JA3S },
     { NULL,              -1 }
 };
 
@@ -102,6 +101,7 @@ typedef struct OutputTlsCtx_ {
     LogFileCtx *file_ctx;
     uint32_t flags;  /** Store mode */
     uint64_t fields; /** Store fields */
+    OutputJsonCommonSettings cfg;
 } OutputTlsCtx;
 
 
@@ -114,7 +114,7 @@ static void JsonTlsLogSubject(json_t *js, SSLState *ssl_state)
 {
     if (ssl_state->server_connp.cert0_subject) {
         json_object_set_new(js, "subject",
-                            json_string(ssl_state->server_connp.cert0_subject));
+                            SCJsonString(ssl_state->server_connp.cert0_subject));
     }
 }
 
@@ -122,28 +122,37 @@ static void JsonTlsLogIssuer(json_t *js, SSLState *ssl_state)
 {
     if (ssl_state->server_connp.cert0_issuerdn) {
         json_object_set_new(js, "issuerdn",
-                            json_string(ssl_state->server_connp.cert0_issuerdn));
+                            SCJsonString(ssl_state->server_connp.cert0_issuerdn));
     }
 }
 
 static void JsonTlsLogSessionResumed(json_t *js, SSLState *ssl_state)
 {
     if (ssl_state->flags & SSL_AL_FLAG_SESSION_RESUMED) {
-        json_object_set_new(js, "session_resumed", json_boolean(true));
+        /* Only log a session as 'resumed' if a certificate has not
+           been seen, and the session is not TLSv1.3 or later. */
+        if ((ssl_state->server_connp.cert0_issuerdn == NULL &&
+               ssl_state->server_connp.cert0_subject == NULL) &&
+               (ssl_state->flags & SSL_AL_FLAG_STATE_SERVER_HELLO) &&
+               ((ssl_state->flags & SSL_AL_FLAG_LOG_WITHOUT_CERT) == 0)) {
+            json_object_set_new(js, "session_resumed", json_boolean(true));
+        }
     }
 }
 
 static void JsonTlsLogFingerprint(json_t *js, SSLState *ssl_state)
 {
-    json_object_set_new(js, "fingerprint",
-                        json_string(ssl_state->server_connp.cert0_fingerprint));
+    if (ssl_state->server_connp.cert0_fingerprint) {
+        json_object_set_new(js, "fingerprint",
+                SCJsonString(ssl_state->server_connp.cert0_fingerprint));
+    }
 }
 
 static void JsonTlsLogSni(json_t *js, SSLState *ssl_state)
 {
     if (ssl_state->client_connp.sni) {
         json_object_set_new(js, "sni",
-                            json_string(ssl_state->client_connp.sni));
+                            SCJsonString(ssl_state->client_connp.sni));
     }
 }
 
@@ -151,38 +160,14 @@ static void JsonTlsLogSerial(json_t *js, SSLState *ssl_state)
 {
     if (ssl_state->server_connp.cert0_serial) {
         json_object_set_new(js, "serial",
-                            json_string(ssl_state->server_connp.cert0_serial));
+                            SCJsonString(ssl_state->server_connp.cert0_serial));
     }
 }
 
 static void JsonTlsLogVersion(json_t *js, SSLState *ssl_state)
 {
-    char ssl_version[SSL_VERSION_LENGTH + 1];
-
-    switch (ssl_state->server_connp.version) {
-        case TLS_VERSION_UNKNOWN:
-            snprintf(ssl_version, SSL_VERSION_LENGTH, "UNDETERMINED");
-            break;
-        case SSL_VERSION_2:
-            snprintf(ssl_version, SSL_VERSION_LENGTH, "SSLv2");
-            break;
-        case SSL_VERSION_3:
-            snprintf(ssl_version, SSL_VERSION_LENGTH, "SSLv3");
-            break;
-        case TLS_VERSION_10:
-            snprintf(ssl_version, SSL_VERSION_LENGTH, "TLSv1");
-            break;
-        case TLS_VERSION_11:
-            snprintf(ssl_version, SSL_VERSION_LENGTH, "TLS 1.1");
-            break;
-        case TLS_VERSION_12:
-            snprintf(ssl_version, SSL_VERSION_LENGTH, "TLS 1.2");
-            break;
-        default:
-            snprintf(ssl_version, SSL_VERSION_LENGTH, "0x%04x",
-                     ssl_state->server_connp.version);
-            break;
-    }
+    char ssl_version[SSL_VERSION_MAX_STRLEN];
+    SSLVersionToString(ssl_state->server_connp.version, ssl_version);
     json_object_set_new(js, "version", json_string(ssl_version));
 }
 
@@ -210,10 +195,66 @@ static void JsonTlsLogNotAfter(json_t *js, SSLState *ssl_state)
     }
 }
 
+static void JsonTlsLogJa3Hash(json_t *js, SSLState *ssl_state)
+{
+    if (ssl_state->client_connp.ja3_hash != NULL) {
+        json_object_set_new(js, "hash",
+                            json_string(ssl_state->client_connp.ja3_hash));
+    }
+}
+
+static void JsonTlsLogJa3String(json_t *js, SSLState *ssl_state)
+{
+    if ((ssl_state->client_connp.ja3_str != NULL) &&
+            ssl_state->client_connp.ja3_str->data != NULL) {
+        json_object_set_new(js, "string",
+                            json_string(ssl_state->client_connp.ja3_str->data));
+    }
+}
+
+static void JsonTlsLogJa3(json_t *js, SSLState *ssl_state)
+{
+    json_t *tjs = json_object();
+    if (unlikely(tjs == NULL))
+        return;
+
+    JsonTlsLogJa3Hash(tjs, ssl_state);
+    JsonTlsLogJa3String(tjs, ssl_state);
+
+    json_object_set_new(js, "ja3", tjs);
+}
+
+static void JsonTlsLogJa3SHash(json_t *js, SSLState *ssl_state)
+{
+    if (ssl_state->server_connp.ja3_hash != NULL) {
+        json_object_set_new(js, "hash",
+                            json_string(ssl_state->server_connp.ja3_hash));
+    }
+}
+
+static void JsonTlsLogJa3SString(json_t *js, SSLState *ssl_state)
+{
+    if ((ssl_state->server_connp.ja3_str != NULL) &&
+            ssl_state->server_connp.ja3_str->data != NULL) {
+        json_object_set_new(js, "string",
+                            json_string(ssl_state->server_connp.ja3_str->data));
+    }
+}
+
+static void JsonTlsLogJa3S(json_t *js, SSLState *ssl_state)
+{
+    json_t *tjs = json_object();
+    if (unlikely(tjs == NULL))
+        return;
+
+    JsonTlsLogJa3SHash(tjs, ssl_state);
+    JsonTlsLogJa3SString(tjs, ssl_state);
+
+    json_object_set_new(js, "ja3s", tjs);
+}
 static void JsonTlsLogCertificate(json_t *js, SSLState *ssl_state)
 {
-    if ((ssl_state->server_connp.cert_input == NULL) ||
-            (ssl_state->server_connp.cert_input_len == 0)) {
+    if (TAILQ_EMPTY(&ssl_state->server_connp.certs)) {
         return;
     }
 
@@ -232,8 +273,7 @@ static void JsonTlsLogCertificate(json_t *js, SSLState *ssl_state)
 
 static void JsonTlsLogChain(json_t *js, SSLState *ssl_state)
 {
-    if ((ssl_state->server_connp.cert_input == NULL) ||
-            (ssl_state->server_connp.cert_input_len == 0)) {
+    if (TAILQ_EMPTY(&ssl_state->server_connp.certs)) {
         return;
     }
 
@@ -313,6 +353,14 @@ static void JsonTlsLogJSONCustom(OutputTlsCtx *tls_ctx, json_t *js,
     /* tls chain */
     if (tls_ctx->fields & LOG_TLS_FIELD_CHAIN)
         JsonTlsLogChain(js, ssl_state);
+
+    /* tls ja3_hash */
+    if (tls_ctx->fields & LOG_TLS_FIELD_JA3)
+        JsonTlsLogJa3(js, ssl_state);
+
+    /* tls ja3s */
+    if (tls_ctx->fields & LOG_TLS_FIELD_JA3S)
+        JsonTlsLogJa3S(js, ssl_state);
 }
 
 void JsonTlsLogJSONExtended(json_t *tjs, SSLState * state)
@@ -336,6 +384,12 @@ void JsonTlsLogJSONExtended(json_t *tjs, SSLState * state)
 
     /* tls notafter */
     JsonTlsLogNotAfter(tjs, state);
+
+    /* tls ja3 */
+    JsonTlsLogJa3(tjs, state);
+
+    /* tls ja3s */
+    JsonTlsLogJa3S(tjs, state);
 }
 
 static int JsonTlsLogger(ThreadVars *tv, void *thread_data, const Packet *p,
@@ -352,14 +406,17 @@ static int JsonTlsLogger(ThreadVars *tv, void *thread_data, const Packet *p,
     if ((ssl_state->server_connp.cert0_issuerdn == NULL ||
             ssl_state->server_connp.cert0_subject == NULL) &&
             ((ssl_state->flags & SSL_AL_FLAG_SESSION_RESUMED) == 0 ||
-            (tls_ctx->flags & LOG_TLS_SESSION_RESUMPTION) == 0)) {
+            (tls_ctx->flags & LOG_TLS_SESSION_RESUMPTION) == 0) &&
+            ((ssl_state->flags & SSL_AL_FLAG_LOG_WITHOUT_CERT) == 0)) {
         return 0;
     }
 
-    json_t *js = CreateJSONHeader((Packet *)p, 1, "tls");
+    json_t *js = CreateJSONHeader(p, LOG_DIR_FLOW, "tls");
     if (unlikely(js == NULL)) {
         return 0;
     }
+
+    JsonAddCommonOptions(&tls_ctx->cfg, p, f, js);
 
     json_t *tjs = json_object();
     if (tjs == NULL) {
@@ -417,7 +474,7 @@ static TmEcode JsonTlsLogThreadInit(ThreadVars *t, const void *initdata, void **
     /* use the Output Context (file pointer and mutex) */
     aft->tlslog_ctx = ((OutputCtx *)initdata)->data;
 
-    aft->buffer = MemBufferCreateNew(OUTPUT_BUFFER_SIZE);
+    aft->buffer = MemBufferCreateNew(JSON_OUTPUT_BUFFER_SIZE);
     if (aft->buffer == NULL) {
         SCFree(aft);
         return TM_ECODE_FAILED;
@@ -492,6 +549,13 @@ static OutputTlsCtx *OutputTlsInitCtx(ConfNode *conf)
         tls_ctx->flags |= LOG_TLS_SESSION_RESUMPTION;
     }
 
+    if ((tls_ctx->fields & LOG_TLS_FIELD_JA3) &&
+            Ja3IsDisabled("fields")) {
+        /* JA3 is disabled, so don't log any JA3 fields */
+        tls_ctx->fields &= ~LOG_TLS_FIELD_JA3;
+        tls_ctx->fields &= ~LOG_TLS_FIELD_JA3S;
+    }
+
     if ((tls_ctx->fields & LOG_TLS_FIELD_CERTIFICATE) &&
             (tls_ctx->fields & LOG_TLS_FIELD_CHAIN)) {
         SCLogWarning(SC_WARN_DUPLICATE_OUTPUT,
@@ -503,30 +567,31 @@ static OutputTlsCtx *OutputTlsInitCtx(ConfNode *conf)
     return tls_ctx;
 }
 
-static OutputCtx *OutputTlsLogInit(ConfNode *conf)
+static OutputInitResult OutputTlsLogInit(ConfNode *conf)
 {
+    OutputInitResult result = { NULL, false };
     LogFileCtx *file_ctx = LogFileNewCtx();
     if (file_ctx == NULL) {
         SCLogError(SC_ERR_TLS_LOG_GENERIC, "couldn't create new file_ctx");
-        return NULL;
+        return result;
     }
 
     if (SCConfLogOpenGeneric(conf, file_ctx, DEFAULT_LOG_FILENAME, 1) < 0) {
         LogFileFreeCtx(file_ctx);
-        return NULL;
+        return result;
     }
 
     OutputTlsCtx *tls_ctx = OutputTlsInitCtx(conf);
     if (unlikely(tls_ctx == NULL)) {
         LogFileFreeCtx(file_ctx);
-        return NULL;
+        return result;
     }
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
         LogFileFreeCtx(file_ctx);
         SCFree(tls_ctx);
-        return NULL;
+        return result;
     }
 
     tls_ctx->file_ctx = file_ctx;
@@ -536,7 +601,9 @@ static OutputCtx *OutputTlsLogInit(ConfNode *conf)
 
     AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_TLS);
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
 static void OutputTlsLogDeinitSub(OutputCtx *output_ctx)
@@ -546,21 +613,23 @@ static void OutputTlsLogDeinitSub(OutputCtx *output_ctx)
     SCFree(output_ctx);
 }
 
-static OutputCtx *OutputTlsLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputInitResult OutputTlsLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
+    OutputInitResult result = { NULL, false };
     OutputJsonCtx *ojc = parent_ctx->data;
 
     OutputTlsCtx *tls_ctx = OutputTlsInitCtx(conf);
     if (unlikely(tls_ctx == NULL))
-        return NULL;
+        return result;
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
         SCFree(tls_ctx);
-        return NULL;
+        return result;
     }
 
     tls_ctx->file_ctx = ojc->file_ctx;
+    tls_ctx->cfg = ojc->cfg;
 
     if ((tls_ctx->fields & LOG_TLS_FIELD_CERTIFICATE) &&
             (tls_ctx->fields & LOG_TLS_FIELD_CHAIN)) {
@@ -575,7 +644,9 @@ static OutputCtx *OutputTlsLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 
     AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_TLS);
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
 void JsonTlsLogRegister (void)
@@ -592,12 +663,3 @@ void JsonTlsLogRegister (void)
         JsonTlsLogger, TLS_HANDSHAKE_DONE, TLS_HANDSHAKE_DONE,
         JsonTlsLogThreadInit, JsonTlsLogThreadDeinit, NULL);
 }
-
-#else
-
-void JsonTlsLogRegister (void)
-{
-}
-
-#endif /* HAVE_LIBJANSSON */
-

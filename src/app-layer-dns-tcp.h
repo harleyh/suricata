@@ -1,4 +1,4 @@
-/* Copyright (C) 2013 Open Information Security Foundation
+/* Copyright (C) 2017 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -15,24 +15,9 @@
  * 02110-1301, USA.
  */
 
-/**
- * \file
- * \author Victor Julien <victor@inliniac.net>
- */
-
-
 #ifndef __APP_LAYER_DNS_TCP_H__
 #define __APP_LAYER_DNS_TCP_H__
 
-#include "app-layer-protos.h"
-#include "app-layer-parser.h"
-#include "app-layer-dns-common.h"
-#include "flow.h"
-#include "queue.h"
-#include "util-byte.h"
-
 void RegisterDNSTCPParsers(void);
-void DNSTCPParserTests(void);
-void DNSTCPParserRegisterTests(void);
 
-#endif /* __APP_LAYER_DNS_TCP_H__ */
+#endif /* !__APP_LAYER_DNS_TCP_H__ */

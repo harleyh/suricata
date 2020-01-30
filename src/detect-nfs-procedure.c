@@ -34,6 +34,8 @@
 #include "detect-pcre.h"
 #include "detect-nfs-procedure.h"
 
+#include "app-layer-parser.h"
+
 #include "flow.h"
 #include "flow-util.h"
 #include "flow-var.h"
@@ -41,16 +43,8 @@
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
-#ifndef HAVE_RUST
-void DetectNfsProcedureRegister(void)
-{
-}
-
-#else
-
 #include "app-layer-nfs-tcp.h"
 #include "rust.h"
-#include "rust-nfs-nfs-gen.h"
 
 /**
  *   [nfs_procedure]:[<|>]<proc>[<><proc>];
@@ -86,7 +80,7 @@ static int DetectEngineInspectNfsRequestGeneric(ThreadVars *tv,
         Flow *f, uint8_t flags, void *alstate,
         void *txv, uint64_t tx_id);
 
-static int DetectNfsProcedureMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *,
+static int DetectNfsProcedureMatch (DetectEngineThreadCtx *, Flow *,
                                    uint8_t, void *, void *, const Signature *,
                                    const SigMatchCtx *);
 
@@ -177,7 +171,7 @@ ProcedureMatch(const uint32_t procedure,
  * \retval 0 no match.
  * \retval 1 match.
  */
-static int DetectNfsProcedureMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+static int DetectNfsProcedureMatch (DetectEngineThreadCtx *det_ctx,
                                    Flow *f, uint8_t flags, void *state,
                                    void *txv, const Signature *s,
                                    const SigMatchCtx *ctx)
@@ -188,7 +182,7 @@ static int DetectNfsProcedureMatch (ThreadVars *t, DetectEngineThreadCtx *det_ct
     uint16_t i;
     for (i = 0; i < 256; i++) {
         uint32_t procedure;
-        if (rs_nfs3_tx_get_procedures(txv, i, &procedure) == 1) {
+        if (rs_nfs_tx_get_procedures(txv, i, &procedure) == 1) {
             SCLogDebug("proc %u mode %u lo %u hi %u",
                     procedure, dd->mode, dd->lo, dd->hi);
             if (ProcedureMatch(procedure, dd->mode, dd->lo, dd->hi))
@@ -362,7 +356,6 @@ static int DetectNfsProcedureSetup (DetectEngineCtx *de_ctx, Signature *s,
     sm->type = DETECT_AL_NFS_PROCEDURE;
     sm->ctx = (void *)dd;
 
-    s->flags |= SIG_FLAG_STATE_MATCH;
     SCLogDebug("low %u hi %u", dd->lo, dd->hi);
     SigMatchAppendSMToList(s, sm, g_nfs_request_buffer_id);
     return 0;
@@ -638,4 +631,3 @@ void DetectNfsProcedureRegisterTests(void)
     UtRegisterTest("ValidityTestParse15", ValidityTestParse15);
 #endif /* UNITTESTS */
 }
-#endif /* HAVE_RUST */

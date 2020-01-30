@@ -49,7 +49,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 static int DetectTosSetup(DetectEngineCtx *, Signature *, const char *);
-static int DetectTosMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+static int DetectTosMatch(DetectEngineThreadCtx *, Packet *,
                           const Signature *, const SigMatchCtx *);
 static void DetectTosRegisterTests(void);
 static void DetectTosFree(void *);
@@ -63,12 +63,15 @@ static void DetectTosFree(void *);
 void DetectTosRegister(void)
 {
     sigmatch_table[DETECT_TOS].name = "tos";
+    sigmatch_table[DETECT_TOS].desc = "match on specific decimal values of the IP header TOS field";
     sigmatch_table[DETECT_TOS].Match = DetectTosMatch;
     sigmatch_table[DETECT_TOS].Setup = DetectTosSetup;
     sigmatch_table[DETECT_TOS].Free = DetectTosFree;
     sigmatch_table[DETECT_TOS].RegisterTests = DetectTosRegisterTests;
     sigmatch_table[DETECT_TOS].flags =
         (SIGMATCH_QUOTES_OPTIONAL|SIGMATCH_HANDLE_NEGATION);
+    sigmatch_table[DETECT_TOS].url =
+        DOC_URL DOC_VERSION "/rules/header-keywords.html#tos";
 
     DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
@@ -84,7 +87,7 @@ void DetectTosRegister(void)
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectTosMatch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx, Packet *p,
+static int DetectTosMatch(DetectEngineThreadCtx *det_ctx, Packet *p,
                    const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectTosData *tosd = (const DetectTosData *)ctx;
@@ -119,31 +122,33 @@ static DetectTosData *DetectTosParse(const char *arg, bool negate)
         goto error;
     }
 
-    const char *str_ptr;
-    res = pcre_get_substring((char *)arg, ov, MAX_SUBSTRINGS, 1,
-                             &str_ptr);
+    /* For TOS value */
+    char tosbytes_str[64] = "";
+    res = pcre_copy_substring((char *)arg, ov, MAX_SUBSTRINGS, 1,
+                             tosbytes_str, sizeof(tosbytes_str));
     if (res < 0) {
-        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
         goto error;
     }
 
     int64_t tos = 0;
 
-    if (*str_ptr == 'x' || *str_ptr == 'X') {
-        int r = ByteExtractStringSigned(&tos, 16, 0, str_ptr + 1);
+    if (tosbytes_str[0] == 'x' || tosbytes_str[0] == 'X') {
+        int r = ByteExtractStringSigned(&tos, 16, 0, &tosbytes_str[1]);
         if (r < 0) {
             goto error;
         }
     } else {
-        int r = ByteExtractStringSigned(&tos, 10, 0, str_ptr);
+        int r = ByteExtractStringSigned(&tos, 10, 0, &tosbytes_str[0]);
         if (r < 0) {
             goto error;
         }
     }
+
     if (!(tos >= DETECT_IPTOS_MIN && tos <= DETECT_IPTOS_MAX)) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid tos argument - "
                    "%s.  The tos option value must be in the range "
-                   "%u - %u", str_ptr, DETECT_IPTOS_MIN, DETECT_IPTOS_MAX);
+                   "%u - %u", tosbytes_str, DETECT_IPTOS_MIN, DETECT_IPTOS_MAX);
         goto error;
     }
 
@@ -170,31 +175,24 @@ error:
  * \retval  0 on Success.
  * \retval -1 on Failure.
  */
-int DetectTosSetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
+static int DetectTosSetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
-    DetectTosData *tosd;
-    SigMatch *sm;
-
-    tosd = DetectTosParse(arg, s->init_data->negated);
+    DetectTosData *tosd = DetectTosParse(arg, s->init_data->negated);
     if (tosd == NULL)
-        goto error;
+        return -1;
 
-    /* Okay so far so good, lets get this into a SigMatch
-     * and put it in the Signature. */
-    sm = SigMatchAlloc();
-    if (sm == NULL)
-        goto error;
+    SigMatch *sm = SigMatchAlloc();
+    if (sm == NULL) {
+        DetectTosFree(tosd);
+        return -1;
+    }
 
     sm->type = DETECT_TOS;
     sm->ctx = (SigMatchCtx *)tosd;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
-
     return 0;
-
-error:
-    return -1;
 }
 
 /**
@@ -202,7 +200,7 @@ error:
  *
  * \param tosd Data to be freed.
  */
-void DetectTosFree(void *tosd)
+static void DetectTosFree(void *tosd)
 {
     SCFree(tosd);
 }

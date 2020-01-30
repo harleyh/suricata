@@ -35,7 +35,7 @@
 
 static void DetectAppLayerProtocolRegisterTests(void);
 
-static int DetectAppLayerProtocolPacketMatch(ThreadVars *tv,
+static int DetectAppLayerProtocolPacketMatch(
         DetectEngineThreadCtx *det_ctx,
         Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
@@ -238,9 +238,9 @@ PrefilterPacketAppProtoCompare(PrefilterPacketHeaderValue v, void *smctx)
     return FALSE;
 }
 
-static int PrefilterSetupAppProto(SigGroupHead *sgh)
+static int PrefilterSetupAppProto(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(sgh, DETECT_AL_APP_LAYER_PROTOCOL,
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_AL_APP_LAYER_PROTOCOL,
         PrefilterPacketAppProtoSet,
         PrefilterPacketAppProtoCompare,
         PrefilterPacketAppProtoMatch);
@@ -258,6 +258,8 @@ static _Bool PrefilterAppProtoIsPrefilterable(const Signature *s)
 void DetectAppLayerProtocolRegister(void)
 {
     sigmatch_table[DETECT_AL_APP_LAYER_PROTOCOL].name = "app-layer-protocol";
+    sigmatch_table[DETECT_AL_APP_LAYER_PROTOCOL].desc = "match on the detected app-layer protocol";
+    sigmatch_table[DETECT_AL_APP_LAYER_PROTOCOL].url = DOC_URL DOC_VERSION "/rules/app-layer.html#app-layer-protocol";
     sigmatch_table[DETECT_AL_APP_LAYER_PROTOCOL].Match =
         DetectAppLayerProtocolPacketMatch;
     sigmatch_table[DETECT_AL_APP_LAYER_PROTOCOL].Setup =

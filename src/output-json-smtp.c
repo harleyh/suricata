@@ -52,8 +52,6 @@
 #include "output-json-smtp.h"
 #include "output-json-email-common.h"
 
-#ifdef HAVE_LIBJANSSON
-
 static json_t *JsonSmtpDataLogger(const Flow *f, void *state, void *vtx, uint64_t tx_id)
 {
     json_t *sjs = json_object();
@@ -64,17 +62,17 @@ static json_t *JsonSmtpDataLogger(const Flow *f, void *state, void *vtx, uint64_
     }
     if (((SMTPState *)state)->helo) {
         json_object_set_new(sjs, "helo",
-                            json_string((const char *)((SMTPState *)state)->helo));
+                            SCJsonString((const char *)((SMTPState *)state)->helo));
     }
     if (tx->mail_from) {
         json_object_set_new(sjs, "mail_from",
-                            json_string((const char *)tx->mail_from));
+                            SCJsonString((const char *)tx->mail_from));
     }
     if (!TAILQ_EMPTY(&tx->rcpt_to_list)) {
         json_t *js_rcptto = json_array();
         if (likely(js_rcptto != NULL)) {
             TAILQ_FOREACH(rcptto_str, &tx->rcpt_to_list, next) {
-                json_array_append_new(js_rcptto, json_string((char *)rcptto_str->str));
+                json_array_append_new(js_rcptto, SCJsonString((char *)rcptto_str->str));
             }
             json_object_set_new(sjs, "rcpt_to", js_rcptto);
         }
@@ -88,15 +86,16 @@ static int JsonSmtpLogger(ThreadVars *tv, void *thread_data, const Packet *p, Fl
     SCEnter();
     JsonEmailLogThread *jhl = (JsonEmailLogThread *)thread_data;
 
-    json_t *sjs;
-    json_t *js = CreateJSONHeaderWithTxId((Packet *)p, 1, "smtp", tx_id);
+    json_t *js = CreateJSONHeaderWithTxId(p, LOG_DIR_FLOW, "smtp", tx_id);
     if (unlikely(js == NULL))
         return TM_ECODE_OK;
 
     /* reset */
     MemBufferReset(jhl->buffer);
 
-    sjs = JsonSmtpDataLogger(f, state, tx, tx_id);
+    JsonAddCommonOptions(&jhl->emaillog_ctx->cfg, p, f, js);
+
+    json_t *sjs = JsonSmtpDataLogger(f, state, tx, tx_id);
     if (sjs) {
         json_object_set_new(js, "smtp", sjs);
     }
@@ -151,30 +150,31 @@ static void OutputSmtpLogDeInitCtxSub(OutputCtx *output_ctx)
 }
 
 #define DEFAULT_LOG_FILENAME "smtp.json"
-static OutputCtx *OutputSmtpLogInit(ConfNode *conf)
+static OutputInitResult OutputSmtpLogInit(ConfNode *conf)
 {
+    OutputInitResult result = { NULL, false };
     LogFileCtx *file_ctx = LogFileNewCtx();
     if(file_ctx == NULL) {
         SCLogError(SC_ERR_SMTP_LOG_GENERIC, "couldn't create new file_ctx");
-        return NULL;
+        return result;
     }
 
     if (SCConfLogOpenGeneric(conf, file_ctx, DEFAULT_LOG_FILENAME, 1) < 0) {
         LogFileFreeCtx(file_ctx);
-        return NULL;
+        return result;
     }
 
     OutputJsonEmailCtx *email_ctx = SCMalloc(sizeof(OutputJsonEmailCtx));
     if (unlikely(email_ctx == NULL)) {
         LogFileFreeCtx(file_ctx);
-        return NULL;
+        return result;
     }
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
         LogFileFreeCtx(file_ctx);
         SCFree(email_ctx);
-        return NULL;
+        return result;
     }
 
     email_ctx->file_ctx = file_ctx;
@@ -185,24 +185,28 @@ static OutputCtx *OutputSmtpLogInit(ConfNode *conf)
     /* enable the logger for the app layer */
     AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_SMTP);
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
-static OutputCtx *OutputSmtpLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputInitResult OutputSmtpLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
+    OutputInitResult result = { NULL, false };
     OutputJsonCtx *ojc = parent_ctx->data;
 
     OutputJsonEmailCtx *email_ctx = SCMalloc(sizeof(OutputJsonEmailCtx));
     if (unlikely(email_ctx == NULL))
-        return NULL;
+        return result;
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
         SCFree(email_ctx);
-        return NULL;
+        return result;
     }
 
     email_ctx->file_ctx = ojc->file_ctx;
+    email_ctx->cfg = ojc->cfg;
 
     OutputEmailInitConf(conf, email_ctx);
 
@@ -212,10 +216,11 @@ static OutputCtx *OutputSmtpLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
     /* enable the logger for the app layer */
     AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_SMTP);
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
-#define OUTPUT_BUFFER_SIZE 65535
 static TmEcode JsonSmtpLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     JsonEmailLogThread *aft = SCMalloc(sizeof(JsonEmailLogThread));
@@ -233,7 +238,7 @@ static TmEcode JsonSmtpLogThreadInit(ThreadVars *t, const void *initdata, void *
     /* Use the Ouptut Context (file pointer and mutex) */
     aft->emaillog_ctx = ((OutputCtx *)initdata)->data;
 
-    aft->buffer = MemBufferCreateNew(OUTPUT_BUFFER_SIZE);
+    aft->buffer = MemBufferCreateNew(JSON_OUTPUT_BUFFER_SIZE);
     if (aft->buffer == NULL) {
         SCFree(aft);
         return TM_ECODE_FAILED;
@@ -269,11 +274,3 @@ void JsonSmtpLogRegister (void) {
         "eve-log.smtp", OutputSmtpLogInitSub, ALPROTO_SMTP, JsonSmtpLogger,
         JsonSmtpLogThreadInit, JsonSmtpLogThreadDeinit, NULL);
 }
-
-#else
-
-void JsonSmtpLogRegister (void)
-{
-}
-
-#endif

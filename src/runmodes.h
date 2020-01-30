@@ -36,14 +36,13 @@ enum RunModes {
     RUNMODE_DAG,
     RUNMODE_AFP_DEV,
     RUNMODE_NETMAP,
-    RUNMODE_TILERA_MPIPE,
     RUNMODE_UNITTEST,
     RUNMODE_NAPATECH,
     RUNMODE_UNIX_SOCKET,
+    RUNMODE_WINDIVERT,
     RUNMODE_USER_MAX, /* Last standard running mode */
     RUNMODE_LIST_KEYWORDS,
     RUNMODE_LIST_APP_LAYERS,
-    RUNMODE_LIST_CUDA_CARDS,
     RUNMODE_LIST_RUNMODES,
     RUNMODE_PRINT_VERSION,
     RUNMODE_PRINT_BUILDINFO,
@@ -66,6 +65,7 @@ extern const char *thread_name_single;
 extern const char *thread_name_workers;
 extern const char *thread_name_verdict;
 extern const char *thread_name_flow_mgr;
+extern const char *thread_name_flow_bypass;
 extern const char *thread_name_flow_rec;
 extern const char *thread_name_unix_socket;
 extern const char *thread_name_detect_loader;
@@ -78,7 +78,7 @@ const char *RunModeGetMainMode(void);
 void RunModeListRunmodes(void);
 void RunModeDispatch(int, const char *);
 void RunModeRegisterRunModes(void);
-void RunModeRegisterNewRunMode(int, const char *, const char *,
+void RunModeRegisterNewRunMode(enum RunModes, const char *, const char *,
                                int (*RunModeFunc)(void));
 void RunModeInitialize(void);
 void RunModeInitializeOutputs(void);
@@ -88,11 +88,16 @@ void RunModeShutDown(void);
 int RunModeOutputFileEnabled(void);
 /* bool indicating if filedata logger is enabled */
 int RunModeOutputFiledataEnabled(void);
+/** bool indicating if run mode is offline */
+bool IsRunModeOffline(enum RunModes run_mode_to_check);
+bool IsRunModeSystem(enum RunModes run_mode_to_check);
+
+void RunModeEnablesBypassManager(void);
+int RunModeNeedsBypassManager(void);
 
 #include "runmode-pcap.h"
 #include "runmode-pcap-file.h"
 #include "runmode-pfring.h"
-#include "runmode-tile.h"
 #include "runmode-nfq.h"
 #include "runmode-ipfw.h"
 #include "runmode-erf-file.h"
@@ -102,6 +107,7 @@ int RunModeOutputFiledataEnabled(void);
 #include "runmode-nflog.h"
 #include "runmode-unix-socket.h"
 #include "runmode-netmap.h"
+#include "runmode-windivert.h"
 
 int threading_set_cpu_affinity;
 extern float threading_detect_ratio;

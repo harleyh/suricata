@@ -15,12 +15,11 @@
  * 02110-1301, USA.
  */
 
-extern crate libc;
-
+use std;
 use std::ffi::CString;
 use std::path::Path;
 
-use core::*;
+use crate::core::*;
 
 #[derive(Debug)]
 pub enum Level {
@@ -114,11 +113,22 @@ macro_rules!SCLogConfig {
     }
 }
 
+// Debug mode: call C SCLogDebug
+#[cfg(feature = "debug")]
 #[macro_export]
 macro_rules!SCLogDebug {
     ($($arg:tt)*) => {
         do_log!(Level::Debug, file!(), line!(), function!(), 0, $($arg)*);
     }
+}
+
+// Release mode: ignore arguments
+// Use a reference to avoid moving values.
+#[cfg(not(feature = "debug"))]
+#[macro_export]
+macro_rules!SCLogDebug {
+    ($last:expr) => { let _ = &$last; let _ = Level::Debug; };
+    ($one:expr, $($arg:tt)*) => { let _ = &$one; SCLogDebug!($($arg)*); };
 }
 
 #[no_mangle]
@@ -137,10 +147,10 @@ pub fn log_set_level(level: Level) {
 /// Rust unit tests).
 pub fn sc_log_message(level: Level,
                       filename: &str,
-                      line: libc::c_uint,
+                      line: std::os::raw::c_uint,
                       function: &str,
-                      code: libc::c_int,
-                      message: &str) -> libc::c_int
+                      code: std::os::raw::c_int,
+                      message: &str) -> std::os::raw::c_int
 {
     unsafe {
         if let Some(c) = SC {
